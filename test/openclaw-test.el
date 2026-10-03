@@ -187,8 +187,35 @@
                                           :totalTokens 50 :contextTokens 200
                                           :totalTokensFresh nil)))
      (should (equal (openclaw--context-usage) "~25%%"))
-     (should (string-match-p "p/m" (openclaw--header-line)))))
+     (let ((openclaw--models nil))
+       (should (string-match-p "p/m" (openclaw--header-line))))))
   (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-header-model-name ()
+  "The header names the model as the gateway does, e.g. the machine."
+  (let ((openclaw--models '((:provider "claude-remote" :id "dev-core"
+                             :name "Claude Code (dev-core)")
+                            (:provider "deepseek" :id "v4" :name "DeepSeek V4"))))
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "m1")
+       ;; claude-remote reports itself as the active model; the
+       ;; session's chosen model (the machine) is shown instead.
+       (setq openclaw--sessions
+             (list (list :key "m1" :modelProvider "claude-remote" :model "dev-core"
+                         :activeModelProvider "claude-remote" :activeModel "claude-remote")))
+       (should (equal (openclaw--session-model) "Claude Code (dev-core)"))
+       (setq openclaw--live-model '("claude-remote" . "claude-remote"))
+       (should (equal (openclaw--session-model) "Claude Code (dev-core)"))
+       ;; A run's model wins; unknown models show as provider/model.
+       (setq openclaw--live-model '("deepseek" . "v4"))
+       (should (equal (openclaw--session-model) "DeepSeek V4"))
+       (setq openclaw--live-model '("other" . "x"))
+       (should (equal (openclaw--session-model) "other/x"))
+       ;; A model named like its provider is still shown if it's all there is.
+       (setq openclaw--live-model nil
+             openclaw--sessions (list (list :key "m1" :modelProvider "solo" :model "solo")))
+       (should (equal (openclaw--session-model) "solo/solo"))))
+    (openclaw-test--kill-chats)))
 
 (ert-deftest openclaw-test-message-navigation ()
   "C-<up>/C-<down> move between the messages you sent."

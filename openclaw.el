@@ -121,6 +121,8 @@
 
 (defvar openclaw--profiles nil
   "User profiles from the last `users.list'.")
+(defvar openclaw--models nil
+  "Models from the last `models.list', for their display names.")
 (defvar openclaw--sessions nil "Session plists from the last `sessions.list'.")
 (defvar openclaw--sessions-defaults nil
   "Defaults (e.g. :contextTokens) from the last `sessions.list'.")
@@ -383,6 +385,11 @@ is gone.  Also catches a handshake that never completes."
   "Restore subscriptions and views after (re)connecting."
   (setq openclaw--reconnect-delay 1)
   (openclaw-request "sessions.subscribe" nil)
+  (openclaw-request "models.list" nil
+                    (lambda (ok res)
+                      (when ok
+                        (setq openclaw--models (plist-get res :models))
+                        (force-mode-line-update t))))
   ;; Agent and user names are needed for chat headers, so reload chats after.
   (openclaw-request
    "users.list" nil
@@ -832,7 +839,7 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (add-hook 'kill-buffer-hook #'openclaw--chat-unsubscribe nil t))
 
 (defvar-local openclaw--live-model nil
-  "Model reported by the gateway when the current/last run started.")
+  "(PROVIDER . MODEL) reported when the current/last run started.")
 
 (defface openclaw-context-usage '((t))
   "Face for the context use percentage in the chat header line.
@@ -844,15 +851,31 @@ there) is used; set attributes here to override it.")
   (seq-find (lambda (s) (equal (plist-get s :key) openclaw--session-key))
             openclaw--sessions))
 
+(defun openclaw--model-name (provider model)
+  "Display name of PROVIDER's MODEL: the gateway's, else \"provider/model\"."
+  (or (plist-get (seq-find (lambda (m) (and (equal (plist-get m :provider) provider)
+                                            (equal (plist-get m :id) model)))
+                           openclaw--models)
+                 :name)
+      (if (and provider (not (string-search "/" model)))
+          (concat provider "/" model)
+        model)))
+
 (defun openclaw--session-model ()
-  "\"provider/model\" for this chat's session, or nil."
-  (or openclaw--live-model
-      (when-let* ((s (openclaw--chat-session))
-                  (model (or (plist-get s :activeModel) (plist-get s :model))))
-        (let ((provider (or (plist-get s :activeModelProvider) (plist-get s :modelProvider))))
-          (if (and provider (not (string-search "/" model)))
-              (concat provider "/" model)
-            model)))))
+  "Display name of this chat's model, or nil.
+The model of the current run, else the session's active model, else
+its chosen one.  A model named like its provider says little (e.g.
+claude-remote's, whose models are machines), so it is shown only when
+there is nothing else."
+  (let* ((s (openclaw--chat-session))
+         (candidates (seq-filter #'cdr
+                                 (list openclaw--live-model
+                                       (cons (plist-get s :activeModelProvider) (plist-get s :activeModel))
+                                       (cons (plist-get s :modelProvider) (plist-get s :model)))))
+         (pick (or (seq-find (lambda (c) (not (equal (car c) (cdr c)))) candidates)
+                   (car candidates))))
+    (when pick
+      (openclaw--model-name (car pick) (cdr pick)))))
 
 (defun openclaw--context-usage ()
   "Context use as \"42%\" (\"~42%\" if estimated), or nil if unknown.
@@ -894,6 +917,7 @@ else the context window."
      (lambda (ok res)
        (if (not ok)
            (message "OpenClaw: %s" (plist-get res :message))
+         (setq openclaw--models (plist-get res :models))
          (let* ((default "agent default")
                 (models
                  (cl-loop for m in (plist-get res :models)
@@ -1649,10 +1673,7 @@ missing newlines (display only) until the stored messages replace it."
                            ("start" (openclaw--set-busy t))
                            ("model"
                             (when-let* ((m (plist-get data :model)))
-                              (setq openclaw--live-model
-                                    (if-let* ((p (plist-get data :provider)))
-                                        (concat p "/" m)
-                                      m))
+                              (setq openclaw--live-model (cons (plist-get data :provider) m))
                               (force-mode-line-update)))
                            ((or "end" "error")
                             (openclaw--set-busy nil)
