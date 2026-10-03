@@ -116,14 +116,14 @@
 (defun openclaw--device-file (name)
   (expand-file-name name openclaw-device-directory))
 
-(defun openclaw--openssl (input-file &rest args)
-  "Run openssl with ARGS reading INPUT-FILE; return raw stdout bytes."
+(defun openclaw--openssl (&rest args)
+  "Run openssl with ARGS; return raw stdout bytes."
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (let ((coding-system-for-read 'binary)
           (err (make-temp-file "openclaw-err")))
       (unwind-protect
-          (unless (zerop (apply #'call-process "openssl" input-file
+          (unless (zerop (apply #'call-process "openssl" nil
                                 (list t err) nil args))
             (error "openssl %s failed: %s" (car args)
                    (with-temp-buffer (insert-file-contents err) (buffer-string))))
@@ -159,10 +159,10 @@
       (make-directory openclaw-device-directory t))
     (set-file-modes openclaw-device-directory #o700)
     (when (file-exists-p key) (delete-file key))
-    (openclaw--openssl nil "genpkey" "-algorithm" "ed25519" "-out" key)
+    (openclaw--openssl "genpkey" "-algorithm" "ed25519" "-out" key)
     (set-file-modes key #o600)
     ;; DER SubjectPublicKeyInfo for Ed25519 is a 12-byte header + 32-byte key.
-    (let* ((raw (substring (openclaw--openssl nil "pkey" "-in" key "-pubout" "-outform" "DER") 12))
+    (let* ((raw (substring (openclaw--openssl "pkey" "-in" key "-pubout" "-outform" "DER") 12))
            (id (secure-hash 'sha256 raw)))
       (openclaw--write-identity (list :deviceId id :publicKey (openclaw--b64url raw)))
       (message "OpenClaw device key generated: %s" id))))
@@ -176,7 +176,7 @@
             (set-buffer-multibyte nil)
             (insert (encode-coding-string text 'utf-8)))
           (openclaw--b64url
-           (openclaw--openssl nil "pkeyutl" "-sign" "-rawin"
+           (openclaw--openssl "pkeyutl" "-sign" "-rawin"
                               "-inkey" (openclaw--device-file "device-key.pem")
                               "-in" in)))
       (delete-file in))))
