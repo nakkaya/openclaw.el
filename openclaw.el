@@ -194,12 +194,12 @@
          (token (openclaw--token))
          (sign-token (or token device-token ""))
          (scopes openclaw-scopes)
-         (payload (mapconcat #'identity
-                             (list "v2" (plist-get identity :deviceId)
-                                   openclaw--client-id openclaw--client-mode
-                                   openclaw--role (string-join scopes ",")
-                                   (number-to-string ts) sign-token nonce)
-                             "|")))
+         (payload (string-join
+                   (list "v2" (plist-get identity :deviceId)
+                         openclaw--client-id openclaw--client-mode
+                         openclaw--role (string-join scopes ",")
+                         (number-to-string ts) sign-token nonce)
+                   "|")))
     `(:minProtocol 4 :maxProtocol 4
       :client (:id ,openclaw--client-id :version "0.1"
                :platform ,(symbol-name system-type) :mode ,openclaw--client-mode)
@@ -1247,10 +1247,9 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
         ;; Already mid-run (e.g. started elsewhere): blink from the start.
         (when (equal (plist-get session :status) "running")
           (openclaw--set-busy t))))
-    (if (window-parameter (selected-window) 'window-side)
-        (select-window (or (window-in-direction 'right) (split-window-right)))
-      ;; keep the current window
-      nil)
+    ;; From the sidebar, open in the window to its right.
+    (when (window-parameter (selected-window) 'window-side)
+      (select-window (or (window-in-direction 'right) (split-window-right))))
     (switch-to-buffer buf)
     ;; `switch-to-buffer' restores the window's old point, which may
     ;; be inside the read-only transcript.
@@ -1304,8 +1303,9 @@ RET on a collapsed block header toggles it instead (its own keymap)."
   (interactive)
   (openclaw-request "chat.abort" `(:sessionKey ,openclaw--session-key)
                     (lambda (ok res)
-                      (message (if ok "OpenClaw: aborted" "OpenClaw abort failed: %s")
-                               (plist-get res :message)))))
+                      (if ok
+                          (message "OpenClaw: aborted")
+                        (message "OpenClaw abort failed: %s" (plist-get res :message))))))
 
 (provide 'openclaw)
 ;;; openclaw.el ends here
