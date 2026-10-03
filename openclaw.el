@@ -484,7 +484,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
 (defun openclaw-sessions-visit ()
   "Open the chat buffer for the session at point."
   (interactive)
-  (let ((section (magit-current-section)))
+  (let ((section (or (magit-current-section) (user-error "No session at point"))))
     (if (eq (oref section type) 'openclaw-session)
         (openclaw-chat (oref section value))
       (magit-section-toggle section))))
@@ -540,7 +540,9 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
 
 (defun openclaw--session-at-point ()
   (let* ((section (magit-current-section))
-         (key (and (eq (oref section type) 'openclaw-session) (oref section value))))
+         (key (and section
+                   (eq (oref section type) 'openclaw-session)
+                   (oref section value))))
     (or (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions)
         (user-error "No session at point"))))
 
