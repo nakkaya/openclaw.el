@@ -604,7 +604,7 @@ When nil, use the name the gateway reports for the session's agent."
 
 (defcustom openclaw-fill-column 80
   "Column at which chat text is filled, regardless of `fill-column'."
-  :type 'integer)
+  :type 'natnum)
 
 (defun openclaw--agent-name ()
   "Prompt name for the current chat buffer."
