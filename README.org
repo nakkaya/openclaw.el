@@ -1,0 +1,79 @@
+#+TITLE: openclaw.el
+
+An Emacs client for the [[https://openclaw.ai][OpenClaw]] gateway: browse your sessions and
+chat with your agents in Emacs.
+
+* Requirements
+
+- Emacs 29.1+
+- =websocket=, =magit-section=, =markdown-mode=
+- =openssl= on =PATH= (signs the device login)
+
+* Installation
+
+#+begin_src emacs-lisp
+(use-package openclaw
+  :vc (:url "https://github.com/nakkaya/openclaw.el" :rev :newest)
+  :custom (openclaw-url "wss://your-gateway-host/"))
+#+end_src
+
+* Setup
+
+1. Give Emacs the gateway token. Either set =openclaw-token=, or keep it
+   in =~/.authinfo.gpg=:
+   
+   #+begin_example
+   machine your-gateway-host password YOUR-GATEWAY-TOKEN
+   #+end_example
+   
+2. =M-x openclaw-generate-device-key= (once per machine).
+3. =M-x openclaw-connect=, approve the pairing request in the web UI,
+   and connect again.
+4. =M-x openclaw= opens the sessions sidebar.
+
+* Usage
+
+** Sessions buffer
+
+| Key   | Action                                        |
+|-------+-----------------------------------------------|
+| =RET= | Open the session at point                     |
+| =TAB= | Expand or collapse a group                    |
+| =c=   | Create a session                              |
+| =r=   | Rename the session                            |
+| =m=   | Move the session to a group (new or existing) |
+| =a=   | Archive the session                           |
+| =k=   | Delete the session                            |
+| =g=   | Refresh                                       |
+| =?=   | Show these keys                               |
+
+** Chat buffer
+
+| Key                  | Action                                      |
+|----------------------+---------------------------------------------|
+| =RET=                | Send the message                            |
+| =S-RET=, =C-j=       | New line in the message                     |
+| =C-c C-c=            | Stop the running turn                       |
+| =C-c C-a=            | Attach a file (=C-u=: remove one)           |
+| =C-c C-v=            | Switch the session's model                  |
+| =C-c C-g=            | Reload the transcript                       |
+| =C-<up>=, =C-<down>= | Previous / next message you sent            |
+| =RET=, =TAB= on =▶=  | Expand or collapse thinking and tool output |
+
+* Options
+
+| Option                     | Default                  |
+|----------------------------+--------------------------|
+| =openclaw-url=             | =ws://127.0.0.1:18789/=  |
+| =openclaw-token=           | from auth-source         |
+| =openclaw-fill-column=     | =80=                     |
+| =openclaw-center-messages= | =t=                      |
+| =openclaw-agent-name=      | the agent's name         |
+| =openclaw-user-name=       | the gateway owner's name |
+
+* Tests
+
+#+begin_src sh
+emacs --batch -Q -f package-initialize -L . -L test \
+  -l openclaw-test -f ert-run-tests-batch-and-exit
+#+end_src
