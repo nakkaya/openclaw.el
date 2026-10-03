@@ -979,7 +979,23 @@ the line number (the `mode-line' foreground)."
 (defun openclaw--fill-nobreak-p ()
   "Don't break where the next line would start with Markdown syntax.
 E.g. inline ``` moved to the start of a line opens a code fence."
-  (looking-at "[ \t]*\\(```\\|#+[ \t]\\|[-*+][ \t]\\|[0-9]+[.)][ \t]\\||\\|>\\)"))
+  (looking-at "[ \t]*\\(```\\|~~~\\|#+[ \t]\\|[-*+][ \t]\\|[0-9]+[.)][ \t]\\||\\|>\\)"))
+
+(defconst openclaw--fence-regexp "[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)"
+  "A code fence line: three or more backticks or tildes (group 1).")
+
+(defun openclaw--fence-step (open)
+  "Return the fence open after the line at point, given OPEN before it.
+Nil outside code.  As in GFM, only a fence of the same character and
+at least the same length closes OPEN."
+  (if (not (looking-at openclaw--fence-regexp))
+      open
+    (let ((fence (match-string 1)))
+      (cond ((not open) fence)
+            ((and (eq (aref fence 0) (aref open 0))
+                  (>= (length fence) (length open)))
+             nil)
+            (t open)))))
 
 (defun openclaw--pin-bottom (&optional window)
   "Keep the last line at the bottom of WINDOW, like a terminal.
@@ -1120,11 +1136,12 @@ A block is a table, a fenced code block or a single other line."
       (goto-char (point-min))
       (while (not (eobp))
         (let ((beg (point)) (width 0))
-          (cond ((looking-at "[ \t]*```")
-                 (forward-line 1)
-                 (while (and (not (eobp)) (not (looking-at "[ \t]*```")))
-                   (forward-line 1))
-                 (forward-line 1))
+          (cond ((looking-at openclaw--fence-regexp)
+                 (let ((open (match-string 1)))
+                   (forward-line 1)
+                   (while (and (not (eobp)) (openclaw--fence-step open))
+                     (forward-line 1))
+                   (forward-line 1)))
                 ((looking-at markdown-table-line-regexp)
                  (while (looking-at markdown-table-line-regexp)
                    (forward-line 1)))
@@ -1159,13 +1176,16 @@ BODY-FACE, if non-nil, is the face of the body text."
     (move-overlay ov start (point))))
 
 (defun openclaw--close-fences (text)
-  "Return TEXT with a closing ``` added if a code fence is left open.
+  "Return TEXT with a closing fence added if a code fence is left open.
 Keeps one message's unclosed fence from turning later ones into code."
-  (let ((n 0) (start 0))
-    (while (string-match "^[ \t]*```" text start)
-      (cl-incf n)
-      (setq start (match-end 0)))
-    (if (cl-oddp n) (concat text "\n```") text)))
+  (let (open)
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (setq open (openclaw--fence-step open))
+        (forward-line 1)))
+    (if open (concat text "\n" open) text)))
 
 (defun openclaw-chat-toggle-fold ()
   "Expand or collapse the block at point."
@@ -1213,14 +1233,14 @@ Tables, fenced and indented code, and headings are left as is, so
 they extend sideways instead of wrapping."
   (save-excursion
     (let ((end (copy-marker end))
-          (skip "[ \t]*\\(```\\||\\|#\\|$\\)\\|    \\|\t")
+          (skip "[ \t]*\\(```\\|~~~\\||\\|#\\|$\\)\\|    \\|\t")
           (item "[ \t]*\\([-*+]\\|[0-9]+[.)]\\) ")
           in-fence)
       (goto-char beg)
       (while (< (point) end)
         (cond
-         ((looking-at "[ \t]*```")
-          (setq in-fence (not in-fence))
+         ((or in-fence (looking-at openclaw--fence-regexp))
+          (setq in-fence (openclaw--fence-step in-fence))
           (forward-line 1))
          ;; Collapse runs of blank lines (outside code) to one.
          ((and (not in-fence)
