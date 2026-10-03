@@ -971,6 +971,27 @@ they extend sideways instead of wrapping."
               (fill-region-as-paragraph pstart pend)
               (goto-char pend)))))))))
 
+;; Each edit in a large markdown-mode buffer costs time proportional to
+;; the buffer (markdown-mode re-scans syntax), and filling makes an edit
+;; per line break.  So text is formatted in a small hidden buffer and
+;; inserted into the chat in one go.
+(defvar openclaw--format-buffer nil)
+
+(defun openclaw--format (text)
+  "Return TEXT with its prose filled, formatted outside the chat buffer."
+  (let ((column fill-column))
+    (unless (buffer-live-p openclaw--format-buffer)
+      (setq openclaw--format-buffer (generate-new-buffer " *openclaw-format*" t))
+      (with-current-buffer openclaw--format-buffer
+        (delay-mode-hooks (gfm-mode))
+        (add-hook 'fill-nobreak-predicate #'openclaw--fill-nobreak-p nil t)))
+    (with-current-buffer openclaw--format-buffer
+      (erase-buffer)
+      (setq fill-column column)
+      (insert text)
+      (openclaw--fill-markdown (point-min) (point-max))
+      (buffer-substring-no-properties (point-min) (point-max)))))
+
 (defun openclaw--insert-message (msg results)
   "Insert MSG, using RESULTS (from `openclaw--tool-results')."
   (let ((role (plist-get msg :role))
@@ -978,9 +999,8 @@ they extend sideways instead of wrapping."
     (when (member role '("user" "assistant"))
       (openclaw--insert-header role)
       (if (stringp content)
-          (let ((start (point)))
-            (insert (openclaw--close-fences (string-trim content)) "\n")
-            (openclaw--fill-markdown start (point)))
+          (insert (openclaw--format
+                   (concat (openclaw--close-fences (string-trim content)) "\n")))
         (let (prev)
           (dolist (block content)
             (pcase (plist-get block :type)
@@ -991,9 +1011,7 @@ they extend sideways instead of wrapping."
                             (string-trim (or (plist-get block :text) "")))))
                  (unless (string-empty-p text)
                    (when prev (insert "\n"))
-                   (let ((start (point)))
-                     (insert text "\n")
-                     (openclaw--fill-markdown start (point))))))
+                   (insert (openclaw--format (concat text "\n"))))))
               ("thinking" (openclaw--insert-fold "Thinking" 'openclaw-thinking
                                                  (plist-get block :thinking) 'openclaw-thinking))
               ("toolCall"
@@ -1158,6 +1176,9 @@ Windows scrolled back into the transcript keep their place."
 (defvar-local openclaw--live-text-start nil
   "Start of the reply text being streamed.")
 
+(defvar-local openclaw--live-text nil
+  "Raw reply text streamed so far.")
+
 (defvar-local openclaw--live-fold nil
   "Body overlay of the thinking block being streamed.")
 
@@ -1199,17 +1220,14 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
                             "assistant"
                             (lambda (new)
                               (when new
-                                (setq openclaw--live-text-start (point-marker)))
-                              (insert d)
-                              ;; Refill the streamed text so far, keeping
-                              ;; trailing spaces (fill drops them, which would
-                              ;; glue the next chunk onto this word).  Fill may
-                              ;; add newlines, so re-protect the whole block.
-                              (let ((trail (and (looking-back "[ \t]+" (line-beginning-position))
-                                                (match-string 0))))
-                                (when trail (delete-region (match-beginning 0) (point)))
-                                (openclaw--fill-markdown openclaw--live-text-start (point))
-                                (when trail (insert trail)))
+                                (setq openclaw--live-text-start (point-marker)
+                                      openclaw--live-text ""))
+                              ;; Refill the raw reply so far and replace the
+                              ;; shown one in a single edit.  Fill may add
+                              ;; newlines, so re-protect the whole block.
+                              (setq openclaw--live-text (concat openclaw--live-text d))
+                              (delete-region openclaw--live-text-start (point))
+                              (insert (openclaw--format openclaw--live-text))
                               (add-text-properties openclaw--live-text-start (point)
                                                    '(read-only t front-sticky t
                                                      rear-nonsticky t))))))
