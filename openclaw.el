@@ -1360,13 +1360,19 @@ Pipes inside `code' do not split cells."
     (nreverse cells)))
 
 (defun openclaw--visible-width (s)
-  "Display width of S, minus markup hidden by `markdown-hide-markup'."
+  "Display width of S, minus markup hidden by `markdown-hide-markup'.
+Fontified text (tables) has the hidden markup marked; elsewhere links
+are recognized by pattern, including the tail of one split by filling."
   (string-width
    (if (invisible-p 'markdown-markup)
-       (concat (cl-loop for c across s
-                        for i from 0
-                        unless (eq (get-text-property i 'invisible s) 'markdown-markup)
-                        collect c))
+       (let ((url "\\](\\(?:[^()\n]\\|([^)\n]*)\\)*)"))
+         (thread-last
+           (concat (cl-loop for c across s
+                            for i from 0
+                            unless (eq (get-text-property i 'invisible s) 'markdown-markup)
+                            collect c))
+           (replace-regexp-in-string (concat "\\[\\([^]\n]*\\)" url) "\\1")
+           (replace-regexp-in-string url "")))
      s)))
 
 (defun openclaw--align-table (beg end)
