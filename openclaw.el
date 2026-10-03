@@ -270,7 +270,10 @@
 
 (defun openclaw-request (method params &optional callback)
   "Send METHOD with PARAMS; call CALLBACK with (OK PAYLOAD-OR-ERROR)."
-  (unless (and openclaw--ws (websocket-openp openclaw--ws))
+  ;; Until the handshake is done only `connect' may be sent: the
+  ;; gateway rejects anything else and closes the connection.
+  (unless (and openclaw--ws (websocket-openp openclaw--ws)
+               (or openclaw--hello (equal method "connect")))
     (user-error "OpenClaw not connected"))
   (let ((id (number-to-string (cl-incf openclaw--next-id))))
     (when callback (puthash id callback openclaw--pending))
@@ -1373,9 +1376,6 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
   (interactive)
   (let ((text (string-trim (buffer-substring-no-properties openclaw--input-marker (point-max)))))
     (when (string-empty-p text) (user-error "Nothing to send"))
-    ;; Blink right away (before the request, so a failure can clear it);
-    ;; the run's start event may take a moment.
-    (openclaw--set-busy t)
     (openclaw-request "chat.send"
                       `(:sessionKey ,openclaw--session-key :message ,text
                         :idempotencyKey ,(format "emacs-%s" (md5 (format "%s%s" text (float-time)))))
@@ -1387,6 +1387,10 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
                               (with-current-buffer buf
                                 (openclaw--set-busy nil)
                                 (openclaw-chat-reload)))))))
+    ;; Blink right away, as the run's start event may take a moment.
+    ;; Only once sent: a refused send (not connected) leaves no busy
+    ;; state.  The failure callback above always runs later.
+    (openclaw--set-busy t)
     (let ((inhibit-read-only t))
       (delete-region openclaw--input-marker (point-max))
       (setq openclaw--live-stream nil)
