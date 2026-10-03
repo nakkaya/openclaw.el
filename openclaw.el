@@ -61,6 +61,8 @@
 (require 'websocket)
 (require 'auth-source)
 (require 'url-parse)
+(require 'magit-section)
+(require 'markdown-mode)
 
 (defgroup openclaw nil
   "Control an OpenClaw gateway."
@@ -344,9 +346,6 @@
       (websocket-close ws))))
 
 ;;;; Sessions sidebar
-
-(require 'magit-section)
-(require 'markdown-mode)
 
 (defun openclaw--sidebar-fit (&optional window)
   "Size the sidebar WINDOW to its widest line plus 2, at most 1/4 of the frame."
