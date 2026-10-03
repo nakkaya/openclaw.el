@@ -468,7 +468,9 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
              (get-buffer "*openclaw-sessions*"))
     (when openclaw--refresh-timer (cancel-timer openclaw--refresh-timer))
     (setq openclaw--refresh-timer
-          (run-with-timer 1 nil #'openclaw-sessions-refresh))))
+          (run-with-timer 1 nil (lambda ()
+                                  (when (openclaw-connected-p)
+                                    (openclaw-sessions-refresh)))))))
 
 (add-hook 'openclaw-event-functions #'openclaw--sessions-on-event)
 
