@@ -42,6 +42,8 @@
 ;;   C-c C-c  abort the running turn
 ;;   C-c C-v  switch the session's model (or click it in the header)
 ;;   C-c C-g  reload the transcript
+;;   C-<up>   go to the previous message you sent
+;;   C-<down> go to the next one (after the last: back to the input)
 ;;   RET/TAB  on a ▶ header: expand/collapse thinking or tool output
 ;;   mouse-1  on a ▶ header: same
 ;;
@@ -650,7 +652,9 @@ stored messages when the run ends.")
   ;; markdown-mode remaps C-a to its own command, which ignores fields
   ;; and would move into the prompt; override that remap.
   "<remap> <move-beginning-of-line>" #'openclaw-chat-beginning-of-line
-  "C-c C-g" #'openclaw-chat-reload)
+  "C-c C-g" #'openclaw-chat-reload
+  "C-<up>" #'openclaw-chat-previous-message
+  "C-<down>" #'openclaw-chat-next-message)
 
 (define-derived-mode openclaw-chat-mode gfm-mode "OpenClaw"
   "Chat with an OpenClaw session.
@@ -1395,6 +1399,25 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
         (insert text "\n\n")
         (add-text-properties (point-min) openclaw--input-marker
                              '(read-only t front-sticky t rear-nonsticky t))))))
+
+(defun openclaw-chat-previous-message ()
+  "Move to the previous message you sent."
+  (interactive)
+  (let ((match (save-excursion
+                 (beginning-of-line)
+                 (text-property-search-backward 'font-lock-face 'openclaw-user t))))
+    (unless match (user-error "No previous message"))
+    (goto-char (prop-match-beginning match))))
+
+(defun openclaw-chat-next-message ()
+  "Move to the next message you sent; after the last, to the input."
+  (interactive)
+  (let ((match (save-excursion
+                 (end-of-line)
+                 (text-property-search-forward 'font-lock-face 'openclaw-user t))))
+    (if match
+        (goto-char (prop-match-beginning match))
+      (openclaw--goto-end))))
 
 (defun openclaw-chat-beginning-of-line (&optional n)
   "Move to the beginning of line N, stopping after the prompt (eshell-style)."
