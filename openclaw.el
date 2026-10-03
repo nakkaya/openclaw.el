@@ -66,7 +66,8 @@
 ;; Other commands: openclaw-disconnect, openclaw-sidebar.
 ;;
 ;; Options: `openclaw-agent-name' (prompt name; default asks the
-;; gateway), `openclaw-fill-column' (default 80),
+;; gateway), `openclaw-user-name' (your messages' header; default the
+;; gateway owner's display name), `openclaw-fill-column' (default 80),
 ;; `openclaw-center-messages' (default t), `openclaw-scopes',
 ;; `openclaw-device-directory'.  The sidebar sizes itself to its
 ;; content, at most 1/4 of the frame.
@@ -117,6 +118,9 @@
   "Session key of a chat buffer.")
 (defvar openclaw--agents nil
   "Payload of the last `agents.list'.")
+
+(defvar openclaw--profiles nil
+  "User profiles from the last `users.list'.")
 (defvar openclaw--sessions nil "Session plists from the last `sessions.list'.")
 (defvar openclaw--sessions-defaults nil
   "Defaults (e.g. :contextTokens) from the last `sessions.list'.")
@@ -375,19 +379,23 @@ is gone.  Also catches a handshake that never completes."
   "Restore subscriptions and views after (re)connecting."
   (setq openclaw--reconnect-delay 1)
   (openclaw-request "sessions.subscribe" nil)
-  ;; Agent names are needed for chat prompts, so reload chats after.
+  ;; Agent and user names are needed for chat headers, so reload chats after.
   (openclaw-request
-   "agents.list" nil
+   "users.list" nil
    (lambda (ok res)
-     (when ok (setq openclaw--agents res))
-     ;; A run may have ended while disconnected, so take the busy
-     ;; state from the fresh session list.
-     (openclaw-sessions-refresh nil #'openclaw--sync-busy)
-     (dolist (buf (buffer-list))
-       (with-current-buffer buf
-         (when (and (derived-mode-p 'openclaw-chat-mode) openclaw--session-key)
-           (openclaw-request "sessions.messages.subscribe" `(:key ,openclaw--session-key))
-           (openclaw-chat-reload)))))))
+     (when ok (setq openclaw--profiles (plist-get res :profiles)))
+     (openclaw-request
+      "agents.list" nil
+      (lambda (ok res)
+        (when ok (setq openclaw--agents res))
+        ;; A run may have ended while disconnected, so take the busy
+        ;; state from the fresh session list.
+        (openclaw-sessions-refresh nil #'openclaw--sync-busy)
+        (dolist (buf (buffer-list))
+          (with-current-buffer buf
+            (when (and (derived-mode-p 'openclaw-chat-mode) openclaw--session-key)
+              (openclaw-request "sessions.messages.subscribe" `(:key ,openclaw--session-key))
+              (openclaw-chat-reload)))))))))
 
 (defun openclaw-connect (&optional callback)
   "Connect to the OpenClaw gateway; call CALLBACK once connected."
@@ -715,6 +723,11 @@ Requires the operator.admin scope."
 When nil, use the name the gateway reports for the session's agent."
   :type '(choice (const nil) string))
 
+(defcustom openclaw-user-name nil
+  "Name shown on your messages.
+When nil, use the gateway owner's display name, or \"You\" without one."
+  :type '(choice (const nil) string))
+
 (defcustom openclaw-fill-column 80
   "Column at which chat text is filled, regardless of `fill-column'."
   :type 'natnum)
@@ -736,6 +749,15 @@ effect for newly opened chat buffers."
                               (plist-get openclaw--agents :agents))))
         (plist-get agent :name))
       "openclaw"))
+
+(defun openclaw--user-name ()
+  "Header name for your messages."
+  (or openclaw-user-name
+      ;; Device logins aren't tied to a profile; the owner paired them.
+      (plist-get (seq-find (lambda (p) (equal (plist-get p :id) "gateway-owner"))
+                           openclaw--profiles)
+                 :displayName)
+      "You"))
 
 (defface openclaw-user '((t :inherit font-lock-keyword-face :weight bold))
   "Face for user message headers.")
@@ -977,7 +999,7 @@ Only while point is in the input area, so scrolling back still works."
 
 (defun openclaw--insert-header (role)
   "Insert the message header for ROLE."
-  (insert (propertize (if (equal role "user") "You" (openclaw--agent-name))
+  (insert (propertize (if (equal role "user") (openclaw--user-name) (openclaw--agent-name))
                       'font-lock-face (if (equal role "user") 'openclaw-user 'openclaw-assistant))
           "\n"))
 
