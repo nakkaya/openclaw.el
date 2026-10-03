@@ -1009,12 +1009,18 @@ Only while point is in the input area, so scrolling back still works."
         ((and (= (length args) 2) (stringp (cadr args))) (cadr args))
         (t (format "%S" args))))
 
+(defconst openclaw--tool-labels '(("exec" . "Terminal") ("web_search" . "Search"))
+  "Header labels for tools whose arguments are shown only when expanded.
+Their arguments (whole scripts, long queries) make poor one-liners.")
+
 (defun openclaw--tool-summary (name args)
   "One-line summary of a call to tool NAME with ARGS."
-  (format "⚙ %s %s" name
-          (truncate-string-to-width
-           (replace-regexp-in-string "[\n ]+" " " (openclaw--tool-args-text args))
-           100 nil nil "…")))
+  (if-let* ((label (cdr (assoc name openclaw--tool-labels))))
+      (concat "⚙ " label)
+    (format "⚙ %s %s" name
+            (truncate-string-to-width
+             (replace-regexp-in-string "[\n ]+" " " (openclaw--tool-args-text args))
+             100 nil nil "…"))))
 
 ;;;;; Folds: collapsed blocks toggled with RET/TAB/mouse, like agent-shell.
 ;; Overlays rather than text properties: markdown-mode lets font-lock
@@ -1140,11 +1146,16 @@ BODY-FACE, if non-nil, is the face of the body text."
   (let ((ov (openclaw--fold-start label face))
         (start (point))
         (width (apply #'max 0 (mapcar #'string-width (split-string body "\n")))))
-    (insert openclaw--body-fence (propertize body 'font-lock-face body-face))
-    (unless (bolp) (insert "\n"))
     (insert openclaw--body-fence)
-    (when (> width fill-column)
-      (put-text-property start (point) 'openclaw-width width))
+    (let ((text-start (point)))
+      (insert (propertize body 'font-lock-face body-face))
+      (unless (bolp) (insert "\n"))
+      ;; Only the text, not the fences: when collapsed, the next line
+      ;; is drawn with the prefix of the hidden body's first character
+      ;; (see `openclaw-chat-toggle-fold').
+      (when (> width fill-column)
+        (put-text-property text-start (point) 'openclaw-width width)))
+    (insert openclaw--body-fence)
     (move-overlay ov start (point))))
 
 (defun openclaw--close-fences (text)
@@ -1165,7 +1176,19 @@ Keeps one message's unclosed fence from turning later ones into code."
                         (overlays-in (line-beginning-position) (line-end-position)))))
     (unless head (user-error "No collapsible block here"))
     (let* ((body (overlay-get head 'openclaw-body))
-           (hidden (overlay-get body 'invisible)))
+           (hidden (overlay-get body 'invisible))
+           (fence (overlay-start body))
+           (text (save-excursion (goto-char fence) (line-beginning-position 2)))
+           (width (get-text-property text 'openclaw-width)))
+      ;; A line starting with hidden text is drawn with that text's
+      ;; prefix.  Expanded, the opening fence (hidden markup) starts the
+      ;; body's first line; collapsed, it starts the line after the block.
+      (when width
+        (with-silent-modifications
+          (if hidden
+              (put-text-property fence text 'openclaw-width width)
+            (remove-text-properties fence text '(openclaw-width nil))))
+        (openclaw--center fence text))
       (overlay-put body 'invisible (not hidden))
       (overlay-put head 'before-string (if hidden "▼ " "▶ ")))))
 
