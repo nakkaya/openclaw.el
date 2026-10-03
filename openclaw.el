@@ -114,6 +114,7 @@
 ;;;; Device identity
 
 (defun openclaw--device-file (name)
+  "Path of file NAME in `openclaw-device-directory'."
   (expand-file-name name openclaw-device-directory))
 
 (defun openclaw--openssl (&rest args)
@@ -125,15 +126,17 @@
       (unwind-protect
           (unless (zerop (apply #'call-process "openssl" nil
                                 (list t err) nil args))
-            (error "openssl %s failed: %s" (car args)
+            (error "OpenSSL %s failed: %s" (car args)
                    (with-temp-buffer (insert-file-contents err) (buffer-string))))
         (delete-file err))
       (buffer-string))))
 
 (defun openclaw--b64url (bytes)
+  "BYTES as unpadded base64url."
   (base64url-encode-string bytes t))
 
 (defun openclaw--read-identity ()
+  "Device identity plist from device.json."
   (let ((file (openclaw--device-file "device.json")))
     (unless (file-exists-p file)
       (user-error "No device key; run M-x openclaw-generate-device-key"))
@@ -141,6 +144,7 @@
                        :object-type 'plist)))
 
 (defun openclaw--write-identity (identity)
+  "Save IDENTITY plist to device.json."
   (let ((file (openclaw--device-file "device.json")))
     ;; Holds the device token: create it private, not chmod it after.
     (with-file-modes #o600
@@ -184,11 +188,13 @@
 ;;;; Connection
 
 (defun openclaw--token ()
+  "Gateway token from `openclaw-token' or auth-source."
   (or openclaw-token
       (auth-source-pick-first-password
        :host (url-host (url-generic-parse-url openclaw-url)))))
 
 (defun openclaw--connect-params (nonce ts)
+  "Params for the `connect' request, signing NONCE and TS."
   (let* ((identity (openclaw--read-identity))
          (device-token (plist-get identity :deviceToken))
          (token (openclaw--token))
@@ -213,6 +219,7 @@
                :nonce ,nonce))))
 
 (defun openclaw--handle-hello (payload)
+  "Handle hello-ok PAYLOAD: store the device token and resume."
   (setq openclaw--hello payload)
   (let ((device-token (plist-get (plist-get payload :auth) :deviceToken)))
     (when device-token
@@ -225,10 +232,12 @@
     (funcall (prog1 openclaw--on-hello (setq openclaw--on-hello nil)))))
 
 (defun openclaw--on-message (_ws frame)
+  "Dispatch text FRAME from the gateway."
   (when (eq (websocket-frame-opcode frame) 'text)
     (openclaw--dispatch frame)))
 
 (defun openclaw--dispatch (frame)
+  "Route FRAME to its request callback or the event hook."
   (let* ((msg (json-parse-string (websocket-frame-text frame)
                                  :object-type 'plist :array-type 'list
                                  :null-object nil :false-object nil))
@@ -270,17 +279,20 @@
     id))
 
 (defun openclaw-connected-p ()
+  "Non-nil when connected and the handshake is done."
   (and openclaw--ws (websocket-openp openclaw--ws) openclaw--hello t))
 
 (defun openclaw--open ()
+  "Open the WebSocket to `openclaw-url'."
   (setq openclaw--ws
         (websocket-open openclaw-url
                         :on-message #'openclaw--on-message
                         :on-close #'openclaw--on-close)))
 
 (defun openclaw--on-close (ws)
-  ;; Ignore sockets we closed on purpose (`openclaw-disconnect' clears
-  ;; `openclaw--ws' first).
+  "Schedule a reconnect after WS closes unexpectedly.
+Sockets closed on purpose are ignored: `openclaw-disconnect' clears
+`openclaw--ws' first."
   (when (eq ws openclaw--ws)
     (setq openclaw--ws nil
           openclaw--hello nil)
@@ -289,11 +301,13 @@
     (openclaw--schedule-reconnect)))
 
 (defun openclaw--schedule-reconnect ()
+  "Reconnect after `openclaw--reconnect-delay' and double it."
   (setq openclaw--reconnect-timer
         (run-with-timer openclaw--reconnect-delay nil #'openclaw--reconnect))
   (setq openclaw--reconnect-delay (min 30 (* 2 openclaw--reconnect-delay))))
 
 (defun openclaw--reconnect ()
+  "Try to reopen the connection, rescheduling on failure."
   (setq openclaw--reconnect-timer nil)
   (condition-case err
       (openclaw--open)
@@ -385,9 +399,11 @@
   (setq-local truncate-lines t))
 
 (defun openclaw--session-name (s)
+  "Display name of session S."
   (or (plist-get s :displayName) (plist-get s :label) (plist-get s :key)))
 
 (defun openclaw--session-line (s)
+  "Sidebar line for session S, with its status marker."
   (concat (pcase (plist-get s :status)
             ("running" (propertize "● " 'font-lock-face 'success))
             ("failed" (propertize "× " 'font-lock-face 'error))
@@ -405,6 +421,7 @@
           (openclaw--insert-sessions kids children))))))
 
 (defun openclaw--render-sidebar ()
+  "Redraw the sidebar from the last session list."
   (let* ((visible (seq-remove (lambda (s) (or (plist-get s :archived)
                                               (plist-get s :isBackground)))
                               openclaw--sessions))
@@ -470,6 +487,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                                             (when callback (funcall callback))))))))
 
 (defun openclaw--sessions-on-event (event _payload)
+  "Refresh the sidebar shortly after a sessions.changed EVENT."
   (when (and (equal event "sessions.changed")
              (get-buffer "*openclaw-sessions*"))
     (when openclaw--refresh-timer (cancel-timer openclaw--refresh-timer))
@@ -489,7 +507,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
       (magit-section-toggle section))))
 
 (defun openclaw-sessions-mouse-visit (event)
-  "Open the session clicked on (or toggle the clicked group)."
+  "Open the session clicked in EVENT (or toggle the clicked group)."
   (interactive "e")
   (mouse-set-point event)
   (openclaw-sessions-visit))
@@ -538,6 +556,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                         (openclaw-chat (plist-get res :key))))))
 
 (defun openclaw--session-at-point ()
+  "Session plist at point in the sidebar."
   (let* ((section (magit-current-section))
          (key (and section
                    (eq (oref section type) 'openclaw-session)
@@ -654,6 +673,7 @@ Unset by default, so the mode-line foreground (like the line number
 there) is used; set attributes here to override it.")
 
 (defun openclaw--chat-session ()
+  "Session plist of the current chat buffer."
   (seq-find (lambda (s) (equal (plist-get s :key) openclaw--session-key))
             openclaw--sessions))
 
@@ -769,8 +789,9 @@ Stops itself once no chat is busy."
       (setq openclaw--blink-timer nil))))
 
 (defun openclaw--busy-dot ()
-  "A ● that blinks while busy; when idle it's drawn in the header's
-background colour, so it keeps its place and the model doesn't shift."
+  "Return a ● that blinks while busy.
+When idle it's drawn in the header's background colour, so it keeps
+its place and the model doesn't shift."
   (let ((bg (face-background 'header-line nil t)))
     (cond ((and openclaw--busy openclaw--blink-on) (propertize "●" 'face 'success))
           (bg (propertize "●" 'face `(:foreground ,bg)))
@@ -810,11 +831,13 @@ Only while point is in the input area, so scrolling back still works."
           (recenter -1))))))
 
 (defun openclaw--chat-buffer (key)
+  "Chat buffer of session KEY, or nil."
   (and key
        (seq-find (lambda (b) (equal (buffer-local-value 'openclaw--session-key b) key))
                  (buffer-list))))
 
 (defun openclaw--insert-header (role)
+  "Insert the message header for ROLE."
   (insert (propertize (if (equal role "user") "You" (openclaw--agent-name))
                       'font-lock-face (if (equal role "user") 'openclaw-user 'openclaw-assistant))
           "\n"))
@@ -826,6 +849,7 @@ Only while point is in the input area, so scrolling back still works."
         (t (format "%S" args))))
 
 (defun openclaw--tool-summary (name args)
+  "One-line summary of a call to tool NAME with ARGS."
   (format "⚙ %s %s" name
           (truncate-string-to-width
            (replace-regexp-in-string "[\n ]+" " " (openclaw--tool-args-text args))
@@ -841,7 +865,7 @@ Only while point is in the input area, so scrolling back still works."
   "<mouse-1>" #'openclaw-chat-toggle-fold)
 
 (defun openclaw--fold-start (label face)
-  "Insert a collapsed header LABEL; return the (empty) body overlay."
+  "Insert a collapsed header LABEL in FACE; return the (empty) body overlay."
   (let ((start (point)))
     (insert (propertize label 'font-lock-face face) "\n")
     (let ((head (make-overlay start (1- (point))))
@@ -860,7 +884,8 @@ Only while point is in the input area, so scrolling back still works."
 (defconst openclaw--body-fence "~~~~\n")
 
 (defun openclaw--insert-fold (label face body &optional body-face)
-  "Insert a collapsed block with header LABEL and hidden BODY."
+  "Insert a collapsed block with header LABEL in FACE and hidden BODY.
+BODY-FACE, if non-nil, is the face of the body text."
   (let ((ov (openclaw--fold-start label face))
         (start (point)))
     (insert openclaw--body-fence (propertize body 'font-lock-face body-face))
@@ -869,7 +894,7 @@ Only while point is in the input area, so scrolling back still works."
     (move-overlay ov start (point))))
 
 (defun openclaw--close-fences (text)
-  "TEXT with a closing ``` added if it leaves a code fence open.
+  "Return TEXT with a closing ``` added if a code fence is left open.
 Keeps one message's unclosed fence from turning later ones into code."
   (let ((n 0) (start 0))
     (while (string-match "^[ \t]*```" text start)
@@ -891,6 +916,7 @@ Keeps one message's unclosed fence from turning later ones into code."
       (overlay-put head 'before-string (if hidden "▼ " "▶ ")))))
 
 (defun openclaw--content-text (content)
+  "Text of message CONTENT, a string or a list of blocks."
   (if (stringp content)
       content
     (mapconcat (lambda (b) (or (plist-get b :text) "")) content "")))
@@ -946,6 +972,7 @@ they extend sideways instead of wrapping."
               (goto-char pend)))))))))
 
 (defun openclaw--insert-message (msg results)
+  "Insert MSG, using RESULTS (from `openclaw--tool-results')."
   (let ((role (plist-get msg :role))
         (content (plist-get msg :content)))
     (when (member role '("user" "assistant"))
@@ -1160,6 +1187,7 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
     (when at-end (openclaw--goto-end))))
 
 (defun openclaw--chat-on-event (event payload)
+  "Stream agent EVENT PAYLOAD into its chat buffer."
   (when (equal event "agent")
     (let ((buf (openclaw--chat-buffer (plist-get payload :sessionKey)))
           (data (plist-get payload :data)))
@@ -1223,6 +1251,7 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
 (add-hook 'openclaw-event-functions #'openclaw--chat-on-event)
 
 (defun openclaw--chat-unsubscribe ()
+  "Unsubscribe from this chat's session messages."
   (when (and openclaw--session-key (openclaw-connected-p))
     (openclaw-request "sessions.messages.unsubscribe" `(:key ,openclaw--session-key))))
 
@@ -1286,7 +1315,7 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
                              '(read-only t front-sticky t rear-nonsticky t))))))
 
 (defun openclaw-chat-beginning-of-line (&optional n)
-  "Like `move-beginning-of-line', stopping after the prompt (eshell-style)."
+  "Move to the beginning of line N, stopping after the prompt (eshell-style)."
   (interactive "^p")
   (move-beginning-of-line n))
 
