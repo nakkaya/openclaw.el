@@ -458,7 +458,8 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                                               (message "OpenClaw: %s" (plist-get res :message))
                                             (setq openclaw--sessions (plist-get res :sessions)
                                                   openclaw--sessions-defaults (plist-get res :defaults))
-                                            (openclaw--render-sidebar)
+                                            (when (get-buffer "*openclaw-sessions*")
+                                              (openclaw--render-sidebar))
                                             (force-mode-line-update t) ; chat header lines
                                             (when fit (openclaw--sidebar-fit))
                                             (when callback (funcall callback))))))))
