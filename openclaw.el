@@ -1007,6 +1007,16 @@ Pipes inside `code' do not split cells."
         (push (string-trim (buffer-substring start end)) cells)))
     (nreverse cells)))
 
+(defun openclaw--visible-width (s)
+  "Display width of S, minus markup hidden by `markdown-hide-markup'."
+  (string-width
+   (if (invisible-p 'markdown-markup)
+       (concat (cl-loop for c across s
+                        for i from 0
+                        unless (eq (get-text-property i 'invisible s) 'markdown-markup)
+                        collect c))
+     s)))
+
 (defun openclaw--align-table (beg end)
   "Align the table BEG..END by visible width.
 `markdown-table-align' measures raw text, which looks misaligned once
@@ -1026,7 +1036,7 @@ Pipes inside `code' do not split cells."
                           collect (apply #'max 3
                                          (mapcar (lambda (r)
                                                    (if (listp r)
-                                                       (markdown--string-width (or (nth i r) ""))
+                                                       (openclaw--visible-width (or (nth i r) ""))
                                                      0))
                                                  rows)))))
     (save-excursion
@@ -1039,7 +1049,7 @@ Pipes inside `code' do not split cells."
           (cl-loop for w in widths for i from 0
                    do (let ((cell (or (nth i r) "")))
                         (insert " " cell
-                                (make-string (- w (markdown--string-width cell)) ?\s)
+                                (make-string (- w (openclaw--visible-width cell)) ?\s)
                                 " |")))
           (insert "\n"))))))
 
