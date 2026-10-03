@@ -52,7 +52,8 @@
 ;;
 ;; Messages are centered in the window.  Tables and code wider than
 ;; the text are centered on their own width, or stay flush left when
-;; wider than the window.
+;; wider than the window.  A chat shown in several windows at once is
+;; centered for the one used last.
 ;;
 ;; Other commands: openclaw-disconnect, openclaw-sidebar.
 ;;
@@ -723,12 +724,11 @@ Prose is filled to `fill-column'; tables and code extend sideways."
                     x))
                 font-lock-defaults))
   (setq-local fill-column openclaw-fill-column)
-  ;; Center the text column (wide blocks override this per line).
-  (when openclaw-center-messages
-    (setq-local line-prefix (openclaw--center-prefix fill-column)))
   (setq-local header-line-format '((:eval (openclaw--header-line))))
   (add-hook 'fill-nobreak-predicate #'openclaw--fill-nobreak-p nil t)
   (add-hook 'post-command-hook #'openclaw--pin-bottom nil t)
+  (add-hook 'window-size-change-functions #'openclaw--center-window nil t)
+  (add-hook 'window-buffer-change-functions #'openclaw--center-window nil t)
   (add-hook 'window-size-change-functions #'openclaw--pin-bottom nil t)
   (add-hook 'kill-buffer-hook #'openclaw--chat-unsubscribe nil t))
 
@@ -952,15 +952,51 @@ Only while point is in the input area, so scrolling back still works."
 (defconst openclaw--body-fence "~~~~\n")
 
 ;;;;; Centering: messages sit in a `fill-column' wide column in the
-;; middle of the window.  Each line starts with a space stretching to
-;; the window's center minus half the width, which Emacs recomputes
-;; per window.  Blocks wider than `fill-column' (tables, code) center
-;; on their own width; wider than the window, the space shrinks to
-;; nothing and they stay flush left.
+;; middle of the window.  Blocks wider than that (tables, code) carry
+;; their width in `openclaw-width' and center on it; wider than the
+;; window, they stay flush left.  Prefixes are literal spaces for the
+;; window's width, recomputed when it changes: completion popups
+;; (company) redraw nearby lines and only keep string prefixes.
 
-(defun openclaw--center-prefix (width)
-  "Line prefix that centers a block WIDTH columns wide in the window."
-  `(space :align-to (- center ,(/ width 2))))
+(defvar-local openclaw--center-columns nil
+  "Window width the line prefixes were computed for.")
+
+(defun openclaw--center-region (beg end columns)
+  "Prefix the lines between BEG and END to center them in COLUMNS."
+  (let ((prefixes (make-hash-table))
+        (pos beg))
+    (cl-flet ((prefix (width)
+                (or (gethash width prefixes)
+                    (puthash width (make-string (max 0 (/ (- columns width) 2)) ?\s)
+                             prefixes))))
+      ;; Lines typed into the input get no property; this covers them.
+      (setq-local line-prefix (prefix fill-column))
+      (with-silent-modifications
+        (while (< pos end)
+          (let ((next (next-single-property-change pos 'openclaw-width nil end)))
+            (put-text-property pos next 'line-prefix
+                               (prefix (or (get-text-property pos 'openclaw-width)
+                                           fill-column)))
+            (setq pos next)))))))
+
+(defun openclaw--center (&optional beg end window)
+  "Center the lines between BEG and END in WINDOW.
+WINDOW defaults to one showing the buffer.  When its width changed
+since the last time, all lines are redone; without BEG, only then."
+  (when-let* ((openclaw-center-messages)
+              (w (or window
+                     (and (eq (window-buffer) (current-buffer)) (selected-window))
+                     (get-buffer-window nil t))))
+    (let ((columns (window-body-width w)))
+      (cond ((not (eql columns openclaw--center-columns))
+             (setq openclaw--center-columns columns)
+             (openclaw--center-region (point-min) (point-max) columns))
+            (beg (openclaw--center-region beg end columns))))))
+
+(defun openclaw--center-window (window)
+  "Re-center the chat shown in WINDOW, e.g. after a resize."
+  (with-current-buffer (window-buffer window)
+    (openclaw--center nil nil window)))
 
 (defun openclaw--wide-blocks ()
   "List (BEG END WIDTH) for the blocks wider than `fill-column'.
@@ -999,8 +1035,8 @@ BODY-FACE, if non-nil, is the face of the body text."
     (insert openclaw--body-fence (propertize body 'font-lock-face body-face))
     (unless (bolp) (insert "\n"))
     (insert openclaw--body-fence)
-    (when (and openclaw-center-messages (> width fill-column))
-      (put-text-property start (point) 'line-prefix (openclaw--center-prefix width)))
+    (when (> width fill-column)
+      (put-text-property start (point) 'openclaw-width width))
     (move-overlay ov start (point))))
 
 (defun openclaw--close-fences (text)
@@ -1106,10 +1142,8 @@ markup, so table widths match what the chat shows."
       (openclaw--fill-markdown (point-min) (point-max))
       (openclaw--align-tables)
       (let ((s (buffer-substring-no-properties (point-min) (point-max))))
-        (when openclaw-center-messages
-          (pcase-dolist (`(,beg ,end ,width) (openclaw--wide-blocks))
-            (put-text-property (1- beg) (1- end) 'line-prefix
-                               (openclaw--center-prefix width) s)))
+        (pcase-dolist (`(,beg ,end ,width) (openclaw--wide-blocks))
+          (put-text-property (1- beg) (1- end) 'openclaw-width width s))
         s))))
 
 (defun openclaw--insert-message (msg results)
@@ -1273,6 +1307,7 @@ Windows scrolled back into the transcript keep their place."
     (add-text-properties (point-min) (point) '(read-only t front-sticky t rear-nonsticky t))
     (set-marker openclaw--input-marker (point))
     (insert input)
+    (openclaw--center (point-min) (point-max))
     (setq openclaw--live-stream nil)
     (if at-end
         (openclaw--goto-end)
@@ -1340,7 +1375,8 @@ formatted; without a usable cursor, reload the whole transcript."
       (let ((results (openclaw--tool-results messages)))
         (dolist (m messages)
           (openclaw--insert-message m results)))
-      (add-text-properties beg (point) '(read-only t front-sticky t rear-nonsticky t)))
+      (add-text-properties beg (point) '(read-only t front-sticky t rear-nonsticky t))
+      (openclaw--center beg (point)))
     (when openclaw--turn-start
       (set-marker openclaw--turn-start nil))
     (setq openclaw--turn-start nil
@@ -1373,7 +1409,8 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
           (unless openclaw--live-stream (openclaw--insert-header "assistant"))
           (setq openclaw--live-stream stream))
         (funcall fn new)
-        (add-text-properties start (point) '(read-only t front-sticky t rear-nonsticky t))))
+        (add-text-properties start (point) '(read-only t front-sticky t rear-nonsticky t))
+        (openclaw--center start (point))))
     (when at-end (openclaw--goto-end))))
 
 (defun openclaw--chat-on-event (event payload)
@@ -1399,7 +1436,8 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
                               (insert (openclaw--format openclaw--live-text))
                               (add-text-properties openclaw--live-text-start (point)
                                                    '(read-only t front-sticky t
-                                                     rear-nonsticky t))))))
+                                                     rear-nonsticky t))
+                              (openclaw--center openclaw--live-text-start (point))))))
             ("thinking" (when-let* ((d (plist-get data :delta)))
                           (openclaw--chat-live
                            "thinking"
@@ -1515,8 +1553,10 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
         (unless (bolp) (insert "\n"))
         (unless openclaw--turn-start
           (setq openclaw--turn-start (point-marker)))
-        (openclaw--insert-header "user")
-        (insert text "\n\n")
+        (let ((start (point)))
+          (openclaw--insert-header "user")
+          (insert text "\n\n")
+          (openclaw--center start (point)))
         (add-text-properties (point-min) openclaw--input-marker
                              '(read-only t front-sticky t rear-nonsticky t))))))
 
