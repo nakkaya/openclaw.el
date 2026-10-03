@@ -30,9 +30,12 @@
 ;;   mouse-1  open the clicked session (on a group: expand/collapse)
 ;;   TAB      expand/collapse a group or sub-sessions
 ;;   c        create a session (asks for name and group)
+;;   r        rename the session at point
+;;   m        move the session at point to a group (a new name creates it)
 ;;   a        archive the session at point
 ;;   k        delete the session at point (needs operator.admin)
 ;;   g        refresh
+;;   ?        list these keys
 ;;
 ;; Chat buffer (*openclaw: NAME*):
 ;;
@@ -445,9 +448,12 @@ is gone.  Also catches a handshake that never completes."
   "<mouse-1>" #'ignore
   "<drag-mouse-1>" #'ignore
   "c" #'openclaw-sessions-create
+  "r" #'openclaw-sessions-rename
+  "m" #'openclaw-sessions-move
   "a" #'openclaw-sessions-archive
   "k" #'openclaw-sessions-delete
-  "g" #'openclaw-sessions-refresh)
+  "g" #'openclaw-sessions-refresh
+  "?" #'openclaw-sessions-help)
 
 (define-derived-mode openclaw-sessions-mode magit-section-mode "OpenClaw-Sessions"
   "Tree of OpenClaw sessions."
@@ -618,6 +624,58 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                    (oref section value))))
     (or (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions)
         (user-error "No session at point"))))
+
+(defun openclaw--patch-session (session params what &optional then)
+  "Apply PARAMS to SESSION with `sessions.patch', then refresh.
+WHAT names the change in the failure message.  THEN, if non-nil, is
+called once the session list is reloaded."
+  (openclaw-request "sessions.patch" `(:key ,(plist-get session :key) ,@params)
+                    (lambda (ok res)
+                      (if ok
+                          (openclaw-sessions-refresh nil then)
+                        (message "OpenClaw %s failed: %s" what (plist-get res :message))))))
+
+(defun openclaw-sessions-rename (session name)
+  "Rename SESSION (at point) to NAME; an empty NAME clears it."
+  (interactive
+   (let ((s (openclaw--session-at-point)))
+     (list s (read-string "Rename to (empty for default): "
+                          (or (plist-get s :label) (plist-get s :displayName))))))
+  (let ((key (plist-get session :key)))
+    (openclaw--patch-session
+     session `(:label ,(if (string-empty-p name) :null name)) "rename"
+     (lambda ()
+       (when-let* ((buf (openclaw--chat-buffer key))
+                   (s (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions)))
+         (with-current-buffer buf
+           (rename-buffer (format "*openclaw: %s*" (openclaw--session-name s)) t)))))))
+
+(defun openclaw-sessions-move (session group)
+  "Move SESSION (at point) to GROUP, creating the group if it is new.
+An empty GROUP takes the session out of its group."
+  (interactive
+   (let ((s (openclaw--session-at-point)))
+     (list s (completing-read "Move to group (new name creates it, empty for none): "
+                              (mapcar (lambda (g) (plist-get g :name)) openclaw--groups)))))
+  (let ((names (mapcar (lambda (g) (plist-get g :name)) openclaw--groups))
+        (patch (lambda ()
+                 (openclaw--patch-session
+                  session `(:category ,(if (string-empty-p group) :null group)) "move"))))
+    (if (or (string-empty-p group) (member group names))
+        (funcall patch)
+      ;; `sessions.groups.put' replaces the whole list.
+      (openclaw-request "sessions.groups.put"
+                        `(:names ,(vconcat names (list group)))
+                        (lambda (ok res)
+                          (if ok
+                              (funcall patch)
+                            (message "OpenClaw group create failed: %s"
+                                     (plist-get res :message))))))))
+
+(defun openclaw-sessions-help ()
+  "Show the sidebar's keys in the echo area."
+  (interactive)
+  (message "RET open  c create  r rename  m move  a archive  k delete  g refresh  TAB fold"))
 
 (defun openclaw-sessions-archive ()
   "Archive the session at point (hides it; restorable from the web UI)."
