@@ -638,6 +638,24 @@
                     "first line\nsecond line\nthird"))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-centering-while-hidden ()
+  "A reply streamed while the chat isn't shown gets prefixes once it is.
+The buffer's `line-prefix' hides missing ones, but completion popups
+only keep text property prefixes."
+  (let ((openclaw-center-messages t))
+    (openclaw-test--with-gateway
+     (let ((buf (openclaw-test--open-chat "hid")))
+       (switch-to-buffer "*scratch*")
+       (with-current-buffer buf
+         (openclaw--chat-on-event
+          "agent" '(:sessionKey "hid" :stream "assistant" :data (:delta "Streamed while hidden."))))
+       (switch-to-buffer buf)
+       (openclaw--center-window (selected-window))
+       (goto-char (point-min))
+       (search-forward "Streamed while hidden")
+       (should (stringp (get-text-property (line-beginning-position) 'line-prefix))))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-copy-strips-centering ()
   "Copied text doesn't carry the centering prefix to other buffers."
   (openclaw-test--with-gateway

@@ -1104,15 +1104,19 @@ Their arguments (whole scripts, long queries) make poor one-liners.")
   "Center the lines between BEG and END in WINDOW.
 WINDOW defaults to one showing the buffer.  When its width changed
 since the last time, all lines are redone; without BEG, only then."
-  (when-let* ((openclaw-center-messages)
-              (w (or window
+  (when openclaw-center-messages
+    (if-let* ((w (or window
                      (and (eq (window-buffer) (current-buffer)) (selected-window))
                      (get-buffer-window nil t))))
-    (let ((columns (window-body-width w)))
-      (cond ((not (eql columns openclaw--center-columns))
-             (setq openclaw--center-columns columns)
-             (openclaw--center-region (point-min) (point-max) columns))
-            (beg (openclaw--center-region beg end columns))))))
+        (let ((columns (window-body-width w)))
+          (cond ((not (eql columns openclaw--center-columns))
+                 (setq openclaw--center-columns columns)
+                 (openclaw--center-region (point-min) (point-max) columns))
+                (beg (openclaw--center-region beg end columns))))
+      ;; Not shown (e.g. reloaded in the background): redo all lines once
+      ;; it is.  The buffer's `line-prefix' hides the missing ones, but
+      ;; completion popups only keep text property prefixes.
+      (setq openclaw--center-columns nil))))
 
 (defun openclaw--center-input (beg end _length)
   "Give text inserted between BEG and END in the input the center prefix.
