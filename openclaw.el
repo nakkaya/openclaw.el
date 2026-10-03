@@ -736,6 +736,7 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (add-hook 'post-command-hook #'openclaw--pin-bottom nil t)
   (add-hook 'window-size-change-functions #'openclaw--center-window nil t)
   (add-hook 'window-buffer-change-functions #'openclaw--center-window nil t)
+  (add-hook 'after-change-functions #'openclaw--center-input nil t)
   (add-hook 'window-size-change-functions #'openclaw--pin-bottom nil t)
   (add-hook 'kill-buffer-hook #'openclaw--chat-unsubscribe nil t))
 
@@ -999,6 +1000,15 @@ since the last time, all lines are redone; without BEG, only then."
              (setq openclaw--center-columns columns)
              (openclaw--center-region (point-min) (point-max) columns))
             (beg (openclaw--center-region beg end columns))))))
+
+(defun openclaw--center-input (beg end _length)
+  "Give text inserted between BEG and END in the input the center prefix.
+The buffer's `line-prefix' already shows it there, but completion
+popups only keep prefixes that are text properties."
+  (when (and openclaw--input-marker (>= beg openclaw--input-marker)
+             (stringp line-prefix))
+    (with-silent-modifications
+      (put-text-property beg end 'line-prefix line-prefix))))
 
 (defun openclaw--center-window (window)
   "Re-center the chat shown in WINDOW, e.g. after a resize."
