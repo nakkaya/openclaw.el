@@ -703,6 +703,9 @@ effect for newly opened chat buffers."
 The draft (the sent input and streamed output) is replaced by the
 stored messages when the run ends.")
 
+(defvar-local openclaw--gap-overlay nil
+  "Overlay padding a streamed draft with a blank line before the prompt.")
+
 (defvar-keymap openclaw-chat-mode-map
   ;; Same keys as agent-shell / comint.
   "RET" #'openclaw-chat-return
@@ -1403,6 +1406,7 @@ formatted; without a usable cursor, reload the whole transcript."
     (setq openclaw--turn-start nil
           openclaw--live-stream nil
           openclaw--live-fold nil)
+    (openclaw--update-gap)
     (when at-end (openclaw--goto-end))))
 
 (defun openclaw--chat-live (stream fn)
@@ -1432,7 +1436,23 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
         (funcall fn new)
         (add-text-properties start (point) '(read-only t front-sticky t rear-nonsticky t))
         (openclaw--center start (point))))
+    (openclaw--update-gap)
     (when at-end (openclaw--goto-end))))
+
+(defun openclaw--update-gap ()
+  "Keep a blank line between the transcript and the prompt.
+Stored messages end with one; a streamed draft may not, so show the
+missing newlines (display only) until the stored messages replace it."
+  (let* ((pos openclaw--live-marker)
+         (missing (cond ((= pos (point-min)) 0)
+                        ((not (eq (char-before pos) ?\n)) 2)
+                        ((not (eq (char-before (1- pos)) ?\n)) 1)
+                        (t 0))))
+    (unless (and openclaw--gap-overlay (overlay-buffer openclaw--gap-overlay))
+      (setq openclaw--gap-overlay (make-overlay pos pos)))
+    (move-overlay openclaw--gap-overlay pos pos)
+    (overlay-put openclaw--gap-overlay 'before-string
+                 (and (> missing 0) (make-string missing ?\n)))))
 
 (defun openclaw--chat-on-event (event payload)
   "Stream agent EVENT PAYLOAD into its chat buffer."
@@ -1695,7 +1715,8 @@ With prefix argument REMOVE, remove a staged attachment instead."
           (insert "\n")
           (openclaw--center start (point)))
         (add-text-properties (point-min) openclaw--input-marker
-                             '(read-only t front-sticky t rear-nonsticky t))))))
+                             '(read-only t front-sticky t rear-nonsticky t))))
+    (openclaw--update-gap)))
 
 (defun openclaw-chat-previous-message ()
   "Move to the previous message you sent."
