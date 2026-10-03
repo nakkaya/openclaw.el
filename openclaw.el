@@ -633,6 +633,14 @@ When nil, use the name the gateway reports for the session's agent."
 (defvar-local openclaw--live-stream nil
   "Stream of the last live delta inserted, to start new blocks.")
 
+(defvar-local openclaw--history-cursor nil
+  "Gateway cursor after the last fetched message, to fetch only newer ones.")
+
+(defvar-local openclaw--turn-start nil
+  "Marker at the start of the current turn's draft, or nil.
+The draft (the sent input and streamed output) is replaced by the
+stored messages when the run ends.")
+
 (defvar-keymap openclaw-chat-mode-map
   ;; Same keys as agent-shell / comint.
   "RET" #'openclaw-chat-return
@@ -1145,6 +1153,7 @@ Windows scrolled back into the transcript keep their place."
                                        (openclaw--line-col (window-point w))))))
     (erase-buffer)
     (delete-all-overlays)
+    (setq openclaw--turn-start nil)
     (let ((results (openclaw--tool-results messages)))
       (dolist (m messages)
         (openclaw--insert-message m results)))
@@ -1173,9 +1182,10 @@ Windows scrolled back into the transcript keep their place."
                       (lambda (ok res)
                         (when (buffer-live-p buf)
                           (with-current-buffer buf
-                            (if ok
-                                (openclaw--chat-render (plist-get res :messages))
-                              (message "OpenClaw: %s" (plist-get res :message)))))))))
+                            (if (not ok)
+                                (message "OpenClaw: %s" (plist-get res :message))
+                              (setq openclaw--history-cursor (plist-get res :deltaCursor))
+                              (openclaw--chat-render (plist-get res :messages)))))))))
 
 (defvar-local openclaw--live-text-start nil
   "Start of the reply text being streamed.")
@@ -1185,6 +1195,51 @@ Windows scrolled back into the transcript keep their place."
 
 (defvar-local openclaw--live-fold nil
   "Body overlay of the thinking block being streamed.")
+
+(defun openclaw--chat-update ()
+  "Replace the current turn's draft with the messages stored since.
+Only messages newer than `openclaw--history-cursor' are fetched and
+formatted; without a usable cursor, reload the whole transcript."
+  (if (not openclaw--history-cursor)
+      (openclaw-chat-reload)
+    (let ((buf (current-buffer))
+          (cursor openclaw--history-cursor))
+      (openclaw-request
+       "chat.history" `(:sessionKey ,openclaw--session-key :cursor ,cursor)
+       (lambda (ok res)
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (cond
+              ((not ok) (message "OpenClaw: %s" (plist-get res :message)))
+              ;; Another update got here first; fetch again from its cursor.
+              ((not (equal cursor openclaw--history-cursor)) (openclaw--chat-update))
+              ;; "reset": the cursor is stale (e.g. the session was compacted).
+              ((not (equal (plist-get res :kind) "delta")) (openclaw-chat-reload))
+              (t
+               (setq openclaw--history-cursor (plist-get res :deltaCursor))
+               (openclaw--chat-replace-turn
+                (mapcar (lambda (d) (plist-get d :message)) (plist-get res :messages))))))))))))
+
+(defun openclaw--chat-replace-turn (messages)
+  "Replace the current turn's draft with MESSAGES, the stored version."
+  (let ((inhibit-read-only t)
+        (at-end (>= (point) openclaw--input-marker))
+        (beg (or openclaw--turn-start openclaw--live-marker)))
+    (save-excursion
+      (dolist (o (overlays-in beg openclaw--live-marker))
+        (delete-overlay o))
+      (delete-region beg openclaw--live-marker)
+      (goto-char beg)
+      (let ((results (openclaw--tool-results messages)))
+        (dolist (m messages)
+          (openclaw--insert-message m results)))
+      (add-text-properties beg (point) '(read-only t front-sticky t rear-nonsticky t)))
+    (when openclaw--turn-start
+      (set-marker openclaw--turn-start nil))
+    (setq openclaw--turn-start nil
+          openclaw--live-stream nil
+          openclaw--live-fold nil)
+    (when at-end (openclaw--goto-end))))
 
 (defun openclaw--chat-live (stream fn)
   "Call FN at the end of the transcript to insert streamed output.
@@ -1197,6 +1252,9 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
             (new (not (equal stream openclaw--live-stream))))
         (when new
           (unless (bolp) (insert "\n"))
+          ;; A run started elsewhere: its draft starts here.
+          (unless openclaw--turn-start
+            (setq openclaw--turn-start (point-marker)))
           ;; Hide the newline that ends a streamed thinking block too.
           (when openclaw--live-fold
             (insert openclaw--body-fence)   ; close the streamed body
@@ -1266,7 +1324,7 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
                               (force-mode-line-update)))
                            ((or "end" "error")
                             (openclaw--set-busy nil)
-                            (openclaw-chat-reload)
+                            (openclaw--chat-update)
                             ;; Token use changed; refresh it for the header.
                             (openclaw-sessions-refresh))))))))))
 
@@ -1331,6 +1389,8 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
       (save-excursion
         (goto-char openclaw--live-marker)
         (unless (bolp) (insert "\n"))
+        (unless openclaw--turn-start
+          (setq openclaw--turn-start (point-marker)))
         (openclaw--insert-header "user")
         (insert text "\n\n")
         (add-text-properties (point-min) openclaw--input-marker
