@@ -978,8 +978,11 @@ they extend sideways instead of wrapping."
 (defvar openclaw--format-buffer nil)
 
 (defun openclaw--format (text)
-  "Return TEXT with its prose filled, formatted outside the chat buffer."
-  (let ((column fill-column))
+  "Return TEXT with prose filled and tables aligned.
+Done outside the chat buffer, but with its fill column and hidden
+markup, so table widths match what the chat shows."
+  (let ((column fill-column)
+        (spec buffer-invisibility-spec))
     (unless (buffer-live-p openclaw--format-buffer)
       (setq openclaw--format-buffer (generate-new-buffer " *openclaw-format*" t))
       (with-current-buffer openclaw--format-buffer
@@ -987,9 +990,11 @@ they extend sideways instead of wrapping."
         (add-hook 'fill-nobreak-predicate #'openclaw--fill-nobreak-p nil t)))
     (with-current-buffer openclaw--format-buffer
       (erase-buffer)
-      (setq fill-column column)
+      (setq fill-column column
+            buffer-invisibility-spec spec)
       (insert text)
       (openclaw--fill-markdown (point-min) (point-max))
+      (openclaw--align-tables)
       (buffer-substring-no-properties (point-min) (point-max)))))
 
 (defun openclaw--insert-message (msg results)
@@ -1097,21 +1102,21 @@ Pipes inside `code' do not split cells."
                                 " |")))
           (insert "\n"))))))
 
-(defun openclaw--align-tables (end)
-  "Align markdown tables before END.
-Fontify first so hidden markup can be excluded from column widths."
+(defun openclaw--align-tables ()
+  "Align the markdown tables in the buffer.
+With markup hidden, fontify first so it can be excluded from column
+widths (slow: markdown-mode's emphasis matching is costly)."
   (save-excursion
     (goto-char (point-min))
-    (while (re-search-forward markdown-table-line-regexp end t)
-      (if (invisible-p (point))         ; inside collapsed tool output
-          (forward-line 1)
-        (let ((beg (line-beginning-position))
-              ;; Insertion type t: the table is reinserted at BEG, and
-              ;; the marker must end up after it, not at BEG.
-              (table-end (copy-marker (markdown-table-end) t)))
-          (font-lock-ensure beg table-end)
-          (ignore-errors (openclaw--align-table beg table-end))
-          (goto-char table-end))))))
+    (while (re-search-forward markdown-table-line-regexp nil t)
+      (let ((beg (line-beginning-position))
+            ;; Insertion type t: the table is reinserted at BEG, and
+            ;; the marker must end up after it, not at BEG.
+            (table-end (copy-marker (markdown-table-end) t)))
+        (when (invisible-p 'markdown-markup)
+          (font-lock-ensure beg table-end))
+        (ignore-errors (openclaw--align-table beg table-end))
+        (goto-char table-end)))))
 
 (defun openclaw--line-col (pos)
   "Line and column of POS, to find the same place after a re-render."
@@ -1143,7 +1148,6 @@ Windows scrolled back into the transcript keep their place."
     (let ((results (openclaw--tool-results messages)))
       (dolist (m messages)
         (openclaw--insert-message m results)))
-    (openclaw--align-tables (point-marker))
     (let ((end (point)))
       ;; `field' makes C-a stop after the prompt, like eshell/comint.
       (insert "\n" (propertize (concat (openclaw--agent-name) "> ")
