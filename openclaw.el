@@ -319,7 +319,10 @@
   "Connect to the OpenClaw gateway; call CALLBACK once connected."
   (interactive)
   (openclaw-disconnect)
-  (openclaw--read-identity)            ; fail early without a key
+  ;; Fail early without a key or any token to authenticate with.
+  (unless (or (plist-get (openclaw--read-identity) :deviceToken)
+              (openclaw--token))
+    (user-error "No gateway token; set `openclaw-token' or add it to auth-source"))
   (setq openclaw--on-hello callback
         openclaw--reconnect-delay 1)
   (openclaw--open))
