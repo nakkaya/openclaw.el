@@ -1037,11 +1037,31 @@ Fontify first so hidden markup can be excluded from column widths."
           (ignore-errors (openclaw--align-table beg table-end))
           (goto-char table-end))))))
 
+(defun openclaw--line-col (pos)
+  "Line and column of POS, to find the same place after a re-render."
+  (save-excursion
+    (goto-char pos)
+    (cons (line-number-at-pos) (current-column))))
+
+(defun openclaw--line-col-pos (line-col)
+  "Buffer position of LINE-COL, from `openclaw--line-col'."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line (1- (car line-col)))
+    (move-to-column (cdr line-col))
+    (point)))
+
 (defun openclaw--chat-render (messages)
-  "Replace the transcript with MESSAGES, keeping pending input."
-  (let ((inhibit-read-only t)
-        (input (buffer-substring-no-properties openclaw--input-marker (point-max)))
-        (at-end (>= (point) openclaw--input-marker)))
+  "Replace the transcript with MESSAGES, keeping pending input.
+Windows scrolled back into the transcript keep their place."
+  (let* ((inhibit-read-only t)
+         (input (buffer-substring-no-properties openclaw--input-marker (point-max)))
+         (at-end (>= (point) openclaw--input-marker))
+         (here (openclaw--line-col (point)))
+         (views (cl-loop for w in (get-buffer-window-list nil nil t)
+                         unless (>= (window-point w) openclaw--input-marker)
+                         collect (list w (openclaw--line-col (window-start w))
+                                       (openclaw--line-col (window-point w))))))
     (erase-buffer)
     (delete-all-overlays)
     (let ((results (openclaw--tool-results messages)))
@@ -1058,7 +1078,12 @@ Fontify first so hidden markup can be excluded from column widths."
     (set-marker openclaw--input-marker (point))
     (insert input)
     (setq openclaw--live-stream nil)
-    (when at-end (openclaw--goto-end))))
+    (if at-end
+        (openclaw--goto-end)
+      (goto-char (openclaw--line-col-pos here)))
+    (pcase-dolist (`(,w ,start ,pt) views)
+      (set-window-start w (openclaw--line-col-pos start) t)
+      (set-window-point w (openclaw--line-col-pos pt)))))
 
 (defun openclaw-chat-reload ()
   "Reload the transcript from the gateway."
