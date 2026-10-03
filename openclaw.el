@@ -262,10 +262,14 @@
     (openclaw--dispatch frame)))
 
 (defun openclaw--dispatch (frame)
-  "Route FRAME to its request callback or the event hook."
-  (let* ((msg (json-parse-string (websocket-frame-text frame)
-                                 :object-type 'plist :array-type 'list
-                                 :null-object nil :false-object nil))
+  "Route FRAME to its request callback or the event hook.
+Text that isn't JSON (e.g. from a proxy while the gateway restarts)
+is ignored."
+  (let* ((msg (condition-case nil
+                  (json-parse-string (websocket-frame-text frame)
+                                     :object-type 'plist :array-type 'list
+                                     :null-object nil :false-object nil)
+                (json-error nil)))
          (type (plist-get msg :type)))
     (pcase type
       ("res"
@@ -774,6 +778,8 @@ effect for newly opened chat buffers."
   "End of the transcript, just above the separator; advances on insert.")
 (defvar-local openclaw--live-stream nil
   "Stream of the last live delta inserted, to start new blocks.")
+(defvar-local openclaw--live-fold nil
+  "Body overlay of the thinking block being streamed.")
 
 (defvar-local openclaw--history-cursor nil
   "Gateway cursor after the last fetched message, to fetch only newer ones.")
@@ -1469,7 +1475,9 @@ Windows scrolled back into the transcript keep their place."
     (insert input)
     (openclaw--center (point-min) (point-max))
     (openclaw--show-attachments)
-    (setq openclaw--live-stream nil)
+    ;; The overlays are gone, the streamed thinking block's included.
+    (setq openclaw--live-stream nil
+          openclaw--live-fold nil)
     (if at-end
         (openclaw--goto-end)
       (goto-char (openclaw--line-col-pos here)))
@@ -1495,9 +1503,6 @@ Windows scrolled back into the transcript keep their place."
 
 (defvar-local openclaw--live-text nil
   "Raw reply text streamed so far.")
-
-(defvar-local openclaw--live-fold nil
-  "Body overlay of the thinking block being streamed.")
 
 (defun openclaw--chat-update ()
   "Replace the current turn's draft with the messages stored since.

@@ -291,6 +291,19 @@
      (should (openclaw-test--request "chat.history"))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-stream-after-reload ()
+  "Thinking keeps streaming after a reload (e.g. on reconnect) mid-block."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "k6")
+     (openclaw--chat-on-event "agent" '(:sessionKey "k6" :stream "thinking" :data (:delta "one")))
+     (openclaw-chat-reload)
+     (openclaw-test--reply "chat.history" (list :messages (openclaw-test--messages 60)))
+     (openclaw--chat-on-event "agent" '(:sessionKey "k6" :stream "thinking" :data (:delta "two")))
+     (openclaw--chat-on-event "agent" '(:sessionKey "k6" :stream "thinking" :data (:delta " three")))
+     (should (string-match-p "two three" (buffer-string)))
+     (should (overlay-buffer openclaw--live-fold))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-stream-split-list ()
   "Streaming formats the whole reply so far, so chunk splits don't merge lines."
   (openclaw-test--with-gateway
@@ -810,6 +823,17 @@ expanded, it has the body's, as it then starts the body's first line."
       (setq openclaw--hello '(:ok t))
       (openclaw-request "chat.send" '(:x 1))
       (should (= 2 (length sent))))))
+
+(ert-deftest openclaw-test-non-json-frame ()
+  "Text frames that aren't JSON are ignored; the next ones still work."
+  (let ((openclaw--pending (make-hash-table :test #'equal))
+        (got nil))
+    (puthash "7" (lambda (ok _) (setq got ok)) openclaw--pending)
+    (cl-flet ((frame (text) (make-websocket-frame :opcode 'text :payload text :completep t)))
+      (openclaw--on-message nil (frame "Service restarting"))
+      (openclaw--on-message nil (frame ""))
+      (openclaw--on-message nil (frame "{\"type\":\"res\",\"id\":\"7\",\"ok\":true}")))
+    (should got)))
 
 (ert-deftest openclaw-test-close-fails-pending ()
   "A closed connection fails the requests still waiting for an answer."
