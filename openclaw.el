@@ -798,6 +798,8 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (add-hook 'window-size-change-functions #'openclaw--center-window nil t)
   (add-hook 'window-buffer-change-functions #'openclaw--center-window nil t)
   (add-hook 'after-change-functions #'openclaw--center-input nil t)
+  (add-function :filter-return (local 'filter-buffer-substring-function)
+                #'openclaw--strip-centering)
   (add-hook 'window-size-change-functions #'openclaw--pin-bottom nil t)
   (add-hook 'kill-buffer-hook #'openclaw--chat-unsubscribe nil t))
 
@@ -1070,6 +1072,12 @@ popups only keep prefixes that are text properties."
              (stringp line-prefix))
     (with-silent-modifications
       (put-text-property beg end 'line-prefix line-prefix))))
+
+(defun openclaw--strip-centering (text)
+  "Remove the centering properties from copied TEXT.
+Yanked elsewhere, they would still indent it there."
+  (remove-list-of-text-properties 0 (length text) '(line-prefix openclaw-width) text)
+  text)
 
 (defun openclaw--center-window (window)
   "Re-center the chat shown in WINDOW, e.g. after a resize."
