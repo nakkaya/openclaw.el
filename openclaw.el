@@ -44,6 +44,7 @@
 ;;   C-c C-g  reload the transcript
 ;;   C-<up>   go to the previous message you sent
 ;;   C-<down> go to the next one (after the last: back to the input)
+;;   C-c C-a  attach a file to the message being written (C-u: remove)
 ;;   RET/TAB  on a ▶ header: expand/collapse thinking or tool output
 ;;   mouse-1  on a ▶ header: same
 ;;
@@ -54,6 +55,10 @@
 ;; the text are centered on their own width, or stay flush left when
 ;; wider than the window.  A chat shown in several windows at once is
 ;; centered for the one used last.
+;;
+;; Attached files are shown to the agent only in the turn they are
+;; sent with; later messages see just the 📎 record.  The gateway keeps
+;; uploaded files until its `attachments.ttlHours' sweep removes them.
 ;;
 ;; Other commands: openclaw-disconnect, openclaw-sidebar.
 ;;
@@ -71,6 +76,7 @@
 (require 'url-parse)
 (require 'magit-section)
 (require 'markdown-mode)
+(require 'mailcap)
 
 (defgroup openclaw nil
   "Control an OpenClaw gateway."
@@ -708,7 +714,8 @@ stored messages when the run ends.")
   "<remap> <move-beginning-of-line>" #'openclaw-chat-beginning-of-line
   "C-c C-g" #'openclaw-chat-reload
   "C-<up>" #'openclaw-chat-previous-message
-  "C-<down>" #'openclaw-chat-next-message)
+  "C-<down>" #'openclaw-chat-next-message
+  "C-c C-a" #'openclaw-chat-attach)
 
 (define-derived-mode openclaw-chat-mode gfm-mode "OpenClaw"
   "Chat with an OpenClaw session.
@@ -1177,6 +1184,9 @@ markup, so table widths match what the chat shows."
                           (and result (concat "\n\n" result))))))
               ("image" (insert "[image]\n")))
             (setq prev (plist-get block :type)))))
+      (openclaw--insert-attachment-lines
+       (mapcar (lambda (m) (cons (plist-get m :fileName) (or (plist-get m :sizeBytes) 0)))
+               (plist-get (plist-get msg :__openclaw) :media)))
       (insert "\n"))))
 
 (defun openclaw--goto-end ()
@@ -1308,6 +1318,7 @@ Windows scrolled back into the transcript keep their place."
     (set-marker openclaw--input-marker (point))
     (insert input)
     (openclaw--center (point-min) (point-max))
+    (openclaw--show-attachments)
     (setq openclaw--live-stream nil)
     (if at-end
         (openclaw--goto-end)
@@ -1509,16 +1520,124 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
     ;; be inside the read-only transcript.
     (openclaw--goto-end)))
 
+;;;;; Attachments: files staged with C-c C-a go with the next message.
+;; The agent sees their content in that turn only; the gateway keeps
+;; a record (name, size) on the message, shown as a 📎 line.
+
+(defvar-local openclaw--attachments nil
+  "Files staged for the next message: plists (:file :name :mime :size).")
+
+(defvar-local openclaw--attachments-overlay nil
+  "Overlay showing the staged attachments above the prompt.")
+
+(defface openclaw-attachment '((t :inherit shadow))
+  "Face for attachment lines.")
+
+(defun openclaw--attachment-text (name size)
+  "Attachment line for file NAME of SIZE bytes."
+  (format "📎 %s (%s)" name (file-size-human-readable size 'si " " "B")))
+
+(defun openclaw--insert-attachment-lines (files)
+  "Insert a 📎 line per (NAME . SIZE) in FILES, after a blank line."
+  (when files
+    (insert "\n")
+    (pcase-dolist (`(,name . ,size) files)
+      (insert (propertize (openclaw--attachment-text name size)
+                          'font-lock-face 'openclaw-attachment)
+              "\n"))))
+
+(defun openclaw--file-mime (file)
+  "MIME type of FILE.
+Guesses from the name are kept for images, text, PDF and JSON;
+otherwise a file without NUL bytes is sent as text/plain (mailcap
+calls .org files Lotus Organizer and .el files application/*)."
+  (let ((guess (mailcap-file-name-to-mime-type file)))
+    (cond ((and guess (string-match-p "\\`\\(?:image\\|text\\)/\\|\\`application/\\(?:pdf\\|json\\)\\'"
+                                      guess))
+           guess)
+          ((with-temp-buffer
+             (set-buffer-multibyte nil)
+             (insert-file-contents-literally file nil 0 8192)
+             (not (search-forward "\0" nil t)))
+           "text/plain")
+          (t (or guess "application/octet-stream")))))
+
+(defun openclaw--attachment-payload (attachment)
+  "ATTACHMENT as `chat.send' wants it, with the file's content in base64."
+  (list :type (if (string-prefix-p "image/" (plist-get attachment :mime)) "image" "file")
+        :mimeType (plist-get attachment :mime)
+        :fileName (plist-get attachment :name)
+        :content (with-temp-buffer
+                   (set-buffer-multibyte nil)
+                   (insert-file-contents-literally (plist-get attachment :file))
+                   (base64-encode-region (point-min) (point-max) t)
+                   (buffer-string))))
+
+(defun openclaw--show-attachments ()
+  "Show the staged attachments above the prompt."
+  (when openclaw--attachments-overlay
+    (delete-overlay openclaw--attachments-overlay)
+    (setq openclaw--attachments-overlay nil))
+  (when openclaw--attachments
+    (let ((pos (save-excursion (goto-char openclaw--input-marker)
+                               (line-beginning-position))))
+      (setq openclaw--attachments-overlay (make-overlay pos pos))
+      (overlay-put openclaw--attachments-overlay 'before-string
+                   (mapconcat (lambda (a)
+                                (concat (propertize (openclaw--attachment-text
+                                                     (plist-get a :name) (plist-get a :size))
+                                                    'face 'openclaw-attachment)
+                                        "\n"))
+                              openclaw--attachments)))))
+
+(defun openclaw-chat-attach (&optional remove)
+  "Attach a file to the message being written; it is sent with it.
+With prefix argument REMOVE, remove a staged attachment instead."
+  (interactive "P")
+  (if remove
+      (let* ((names (or (mapcar (lambda (a) (plist-get a :name)) openclaw--attachments)
+                        (user-error "No attachments")))
+             (name (if (cdr names)
+                       (completing-read "Remove attachment: " names nil t)
+                     (car names))))
+        (setq openclaw--attachments
+              (seq-remove (lambda (a) (equal (plist-get a :name) name)) openclaw--attachments)))
+    (let* ((file (expand-file-name (read-file-name "Attach file: " nil nil t)))
+           (_ (unless (file-regular-p file) (user-error "Not a file: %s" file)))
+           (size (file-attribute-size (file-attributes file)))
+           (mime (openclaw--file-mime file))
+           (limits (plist-get (plist-get openclaw--hello :policy) :attachments))
+           (limit (plist-get limits (if (string-prefix-p "image/" mime)
+                                        :maxImageBytes :maxBytes))))
+      (when (seq-find (lambda (a) (equal (plist-get a :file) file)) openclaw--attachments)
+        (user-error "Already attached: %s" file))
+      (when (and limit (> size limit))
+        (user-error "%s is too large (%s; the gateway allows %s)"
+                    (file-name-nondirectory file)
+                    (file-size-human-readable size 'si " " "B")
+                    (file-size-human-readable limit 'si " " "B")))
+      (setq openclaw--attachments
+            (append openclaw--attachments
+                    (list (list :file file :name (file-name-nondirectory file)
+                                :mime mime :size size))))))
+  (openclaw--show-attachments))
+
 (defun openclaw-chat-send ()
   "Send the input area to the session."
   (interactive)
-  (let ((text (string-trim (buffer-substring-no-properties openclaw--input-marker (point-max)))))
-    (when (string-empty-p text) (user-error "Nothing to send"))
+  (let ((text (string-trim (buffer-substring-no-properties openclaw--input-marker (point-max))))
+        (attachments openclaw--attachments))
+    (when (string-empty-p text)
+      (user-error (if attachments "Write a message to go with the attachment"
+                    "Nothing to send")))
     (let* ((buf (current-buffer))
            (ws openclaw--ws)
            (id (openclaw-request
                 "chat.send"
                 `(:sessionKey ,openclaw--session-key :message ,text
+                  ,@(and attachments
+                         (list :attachments
+                               (vconcat (mapcar #'openclaw--attachment-payload attachments))))
                   :idempotencyKey ,(format "emacs-%s" (md5 (format "%s%s" text (float-time)))))
                 (lambda (ok res)
                   (unless ok
@@ -1526,12 +1645,15 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
                     (when (buffer-live-p buf)
                       (with-current-buffer buf
                         (openclaw--set-busy nil)
-                        ;; Put the text back to send again (unless
-                        ;; something new was typed meanwhile).
+                        ;; Put the text and files back to send again
+                        ;; (unless something new was added meanwhile).
                         (when (= openclaw--input-marker (point-max))
                           (save-excursion
                             (goto-char (point-max))
                             (insert text)))
+                        (unless openclaw--attachments
+                          (setq openclaw--attachments attachments)
+                          (openclaw--show-attachments))
                         ;; Reconnecting reloads the transcript anyway.
                         (when (openclaw-connected-p)
                           (openclaw-chat-reload)))))))))
@@ -1545,6 +1667,8 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
     ;; Only once sent: a refused send (not connected) leaves no busy
     ;; state.  The failure callback above always runs later.
     (openclaw--set-busy t)
+    (setq openclaw--attachments nil)
+    (openclaw--show-attachments)
     (let ((inhibit-read-only t))
       (delete-region openclaw--input-marker (point-max))
       (setq openclaw--live-stream nil)
@@ -1555,7 +1679,10 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
           (setq openclaw--turn-start (point-marker)))
         (let ((start (point)))
           (openclaw--insert-header "user")
-          (insert text "\n\n")
+          (insert text "\n")
+          (openclaw--insert-attachment-lines
+           (mapcar (lambda (a) (cons (plist-get a :name) (plist-get a :size))) attachments))
+          (insert "\n")
           (openclaw--center start (point)))
         (add-text-properties (point-min) openclaw--input-marker
                              '(read-only t front-sticky t rear-nonsticky t))))))
