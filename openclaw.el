@@ -50,10 +50,15 @@
 ;; Chat header line: a ● that blinks while the agent is working, the
 ;; session's model (click to switch) and context use in percent.
 ;;
+;; Messages are centered in the window.  Tables and code wider than
+;; the text are centered on their own width, or stay flush left when
+;; wider than the window.
+;;
 ;; Other commands: openclaw-disconnect, openclaw-sidebar.
 ;;
 ;; Options: `openclaw-agent-name' (prompt name; default asks the
-;; gateway), `openclaw-fill-column' (default 80), `openclaw-scopes',
+;; gateway), `openclaw-fill-column' (default 80),
+;; `openclaw-center-messages' (default t), `openclaw-scopes',
 ;; `openclaw-device-directory'.  The sidebar sizes itself to its
 ;; content, at most 1/4 of the frame.
 
@@ -649,6 +654,13 @@ When nil, use the name the gateway reports for the session's agent."
   "Column at which chat text is filled, regardless of `fill-column'."
   :type 'natnum)
 
+(defcustom openclaw-center-messages t
+  "Non-nil to center chat messages in the window.
+Tables and code wider than `openclaw-fill-column' are centered on their
+own width, or stay flush left when wider than the window.  Takes
+effect for newly opened chat buffers."
+  :type 'boolean)
+
 (defun openclaw--agent-name ()
   "Prompt name for the current chat buffer."
   (or openclaw-agent-name
@@ -711,6 +723,9 @@ Prose is filled to `fill-column'; tables and code extend sideways."
                     x))
                 font-lock-defaults))
   (setq-local fill-column openclaw-fill-column)
+  ;; Center the text column (wide blocks override this per line).
+  (when openclaw-center-messages
+    (setq-local line-prefix (openclaw--center-prefix fill-column)))
   (setq-local header-line-format '((:eval (openclaw--header-line))))
   (add-hook 'fill-nobreak-predicate #'openclaw--fill-nobreak-p nil t)
   (add-hook 'post-command-hook #'openclaw--pin-bottom nil t)
@@ -936,14 +951,56 @@ Only while point is in the input area, so scrolling back still works."
 ;; ~~~~ fence makes backtick lines inside them inert.
 (defconst openclaw--body-fence "~~~~\n")
 
+;;;;; Centering: messages sit in a `fill-column' wide column in the
+;; middle of the window.  Each line starts with a space stretching to
+;; the window's center minus half the width, which Emacs recomputes
+;; per window.  Blocks wider than `fill-column' (tables, code) center
+;; on their own width; wider than the window, the space shrinks to
+;; nothing and they stay flush left.
+
+(defun openclaw--center-prefix (width)
+  "Line prefix that centers a block WIDTH columns wide in the window."
+  `(space :align-to (- center ,(/ width 2))))
+
+(defun openclaw--wide-blocks ()
+  "List (BEG END WIDTH) for the blocks wider than `fill-column'.
+A block is a table, a fenced code block or a single other line."
+  (let (blocks)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((beg (point)) (width 0))
+          (cond ((looking-at "[ \t]*```")
+                 (forward-line 1)
+                 (while (and (not (eobp)) (not (looking-at "[ \t]*```")))
+                   (forward-line 1))
+                 (forward-line 1))
+                ((looking-at markdown-table-line-regexp)
+                 (while (looking-at markdown-table-line-regexp)
+                   (forward-line 1)))
+                (t (forward-line 1)))
+          (save-excursion
+            (let ((end (point)))
+              (goto-char beg)
+              (while (< (point) end)
+                (setq width (max width (openclaw--visible-width
+                                        (buffer-substring (point) (line-end-position)))))
+                (forward-line 1))))
+          (when (> width fill-column)
+            (push (list beg (point) width) blocks)))))
+    blocks))
+
 (defun openclaw--insert-fold (label face body &optional body-face)
   "Insert a collapsed block with header LABEL in FACE and hidden BODY.
 BODY-FACE, if non-nil, is the face of the body text."
   (let ((ov (openclaw--fold-start label face))
-        (start (point)))
+        (start (point))
+        (width (apply #'max 0 (mapcar #'string-width (split-string body "\n")))))
     (insert openclaw--body-fence (propertize body 'font-lock-face body-face))
     (unless (bolp) (insert "\n"))
     (insert openclaw--body-fence)
+    (when (and openclaw-center-messages (> width fill-column))
+      (put-text-property start (point) 'line-prefix (openclaw--center-prefix width)))
     (move-overlay ov start (point))))
 
 (defun openclaw--close-fences (text)
@@ -1031,7 +1088,7 @@ they extend sideways instead of wrapping."
 (defvar openclaw--format-buffer nil)
 
 (defun openclaw--format (text)
-  "Return TEXT with prose filled and tables aligned.
+  "Return TEXT with prose filled, tables aligned and wide blocks centered.
 Done outside the chat buffer, but with its fill column and hidden
 markup, so table widths match what the chat shows."
   (let ((column fill-column)
@@ -1048,7 +1105,12 @@ markup, so table widths match what the chat shows."
       (insert text)
       (openclaw--fill-markdown (point-min) (point-max))
       (openclaw--align-tables)
-      (buffer-substring-no-properties (point-min) (point-max)))))
+      (let ((s (buffer-substring-no-properties (point-min) (point-max))))
+        (when openclaw-center-messages
+          (pcase-dolist (`(,beg ,end ,width) (openclaw--wide-blocks))
+            (put-text-property (1- beg) (1- end) 'line-prefix
+                               (openclaw--center-prefix width) s)))
+        s))))
 
 (defun openclaw--insert-message (msg results)
   "Insert MSG, using RESULTS (from `openclaw--tool-results')."
