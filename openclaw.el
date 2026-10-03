@@ -108,6 +108,9 @@
 (defvar openclaw--reconnect-timer nil)
 (defvar openclaw--reconnect-delay 1
   "Seconds before the next reconnect attempt; doubles up to 30.")
+(defvar openclaw--last-frame 0
+  "Time the last frame arrived from the gateway.")
+(defvar openclaw--watchdog-timer nil)
 
 (defconst openclaw--client-id "cli")
 (defconst openclaw--client-mode "cli")
@@ -235,6 +238,7 @@
 
 (defun openclaw--on-message (_ws frame)
   "Dispatch text FRAME from the gateway."
+  (setq openclaw--last-frame (float-time))
   (when (eq (websocket-frame-opcode frame) 'text)
     (openclaw--dispatch frame)))
 
@@ -289,6 +293,9 @@
 
 (defun openclaw--open ()
   "Open the WebSocket to `openclaw-url'."
+  (setq openclaw--last-frame (float-time))
+  (unless openclaw--watchdog-timer
+    (setq openclaw--watchdog-timer (run-with-timer 5 5 #'openclaw--watchdog)))
   (setq openclaw--ws
         (websocket-open openclaw-url
                         :on-message #'openclaw--on-message
@@ -301,9 +308,37 @@ Sockets closed on purpose are ignored: `openclaw-disconnect' clears
   (when (eq ws openclaw--ws)
     (setq openclaw--ws nil
           openclaw--hello nil)
-    (clrhash openclaw--pending)
+    (openclaw--fail-pending)
     (message "OpenClaw disconnected; reconnecting in %ds" openclaw--reconnect-delay)
     (openclaw--schedule-reconnect)))
+
+(defun openclaw--fail-pending ()
+  "Call the callbacks of unanswered requests with a connection error.
+So that, e.g., a send lost with the connection reports it failed."
+  (let (callbacks)
+    (maphash (lambda (_id cb) (push cb callbacks)) openclaw--pending)
+    (clrhash openclaw--pending)
+    (dolist (cb callbacks)
+      (with-demoted-errors "OpenClaw: %S"
+        (funcall cb nil '(:message "connection lost"))))))
+
+(defun openclaw--drop-connection ()
+  "Close a connection that stopped responding; it reconnects on close."
+  (when openclaw--ws
+    (message "OpenClaw: gateway not responding")
+    (websocket-close openclaw--ws)))
+
+(defun openclaw--watchdog ()
+  "Reconnect when the gateway has been silent for two tick intervals.
+A connection can die without Emacs noticing (sleep, network change);
+the gateway sends a tick every `tickIntervalMs', so silence means it
+is gone.  Also catches a handshake that never completes."
+  (when (and openclaw--ws
+             (> (- (float-time) openclaw--last-frame)
+                (* 2 (/ (or (plist-get (plist-get openclaw--hello :policy) :tickIntervalMs)
+                            30000)
+                        1000.0))))
+    (openclaw--drop-connection)))
 
 (defun openclaw--schedule-reconnect ()
   "Reconnect after `openclaw--reconnect-delay' and double it."
@@ -357,11 +392,14 @@ Sockets closed on purpose are ignored: `openclaw-disconnect' clears
   (when openclaw--reconnect-timer
     (cancel-timer openclaw--reconnect-timer)
     (setq openclaw--reconnect-timer nil))
+  (when openclaw--watchdog-timer
+    (cancel-timer openclaw--watchdog-timer)
+    (setq openclaw--watchdog-timer nil))
   (when openclaw--ws
     (let ((ws openclaw--ws))
       (setq openclaw--ws nil
             openclaw--hello nil)
-      (clrhash openclaw--pending)
+      (openclaw--fail-pending)
       (websocket-close ws))))
 
 ;;;; Sessions sidebar
@@ -1376,17 +1414,33 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
   (interactive)
   (let ((text (string-trim (buffer-substring-no-properties openclaw--input-marker (point-max)))))
     (when (string-empty-p text) (user-error "Nothing to send"))
-    (openclaw-request "chat.send"
-                      `(:sessionKey ,openclaw--session-key :message ,text
-                        :idempotencyKey ,(format "emacs-%s" (md5 (format "%s%s" text (float-time)))))
-                      (let ((buf (current-buffer)))
-                        (lambda (ok res)
-                          (unless ok
-                            (message "OpenClaw send failed: %s" (plist-get res :message))
-                            (when (buffer-live-p buf)
-                              (with-current-buffer buf
-                                (openclaw--set-busy nil)
-                                (openclaw-chat-reload)))))))
+    (let* ((buf (current-buffer))
+           (ws openclaw--ws)
+           (id (openclaw-request
+                "chat.send"
+                `(:sessionKey ,openclaw--session-key :message ,text
+                  :idempotencyKey ,(format "emacs-%s" (md5 (format "%s%s" text (float-time)))))
+                (lambda (ok res)
+                  (unless ok
+                    (message "OpenClaw send failed: %s" (plist-get res :message))
+                    (when (buffer-live-p buf)
+                      (with-current-buffer buf
+                        (openclaw--set-busy nil)
+                        ;; Put the text back to send again (unless
+                        ;; something new was typed meanwhile).
+                        (when (= openclaw--input-marker (point-max))
+                          (save-excursion
+                            (goto-char (point-max))
+                            (insert text)))
+                        ;; Reconnecting reloads the transcript anyway.
+                        (when (openclaw-connected-p)
+                          (openclaw-chat-reload)))))))))
+      ;; The gateway answers at once; no answer means the connection
+      ;; died unnoticed, so reconnect now (which fails the send).
+      (run-with-timer 15 nil (lambda ()
+                               (when (and (eq ws openclaw--ws)
+                                          (gethash id openclaw--pending))
+                                 (openclaw--drop-connection)))))
     ;; Blink right away, as the run's start event may take a moment.
     ;; Only once sent: a refused send (not connected) leaves no busy
     ;; state.  The failure callback above always runs later.
