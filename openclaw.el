@@ -1208,6 +1208,9 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
 
 (defun openclaw-chat (key)
   "Open the chat buffer for session KEY."
+  ;; A new buffer needs the gateway to load; fail before creating it.
+  (unless (or (openclaw--chat-buffer key) (openclaw-connected-p))
+    (user-error "OpenClaw not connected"))
   (let* ((session (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions))
          (buf (or (openclaw--chat-buffer key)
                   (generate-new-buffer
