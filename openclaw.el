@@ -140,8 +140,10 @@
 
 (defun openclaw--write-identity (identity)
   (let ((file (openclaw--device-file "device.json")))
-    (with-temp-file file
-      (insert (json-serialize identity)))
+    ;; Holds the device token: create it private, not chmod it after.
+    (with-file-modes #o600
+      (with-temp-file file
+        (insert (json-serialize identity))))
     (set-file-modes file #o600)))
 
 (defun openclaw-generate-device-key ()
@@ -151,7 +153,8 @@
     (when (and (file-exists-p key)
                (not (yes-or-no-p "Device key exists; replace it (requires re-pairing)? ")))
       (user-error "Aborted"))
-    (make-directory openclaw-device-directory t)
+    (with-file-modes #o700
+      (make-directory openclaw-device-directory t))
     (set-file-modes openclaw-device-directory #o700)
     (when (file-exists-p key) (delete-file key))
     (openclaw--openssl nil "genpkey" "-algorithm" "ed25519" "-out" key)
