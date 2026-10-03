@@ -306,8 +306,9 @@
    "agents.list" nil
    (lambda (ok res)
      (when ok (setq openclaw--agents res))
-     (when (get-buffer "*openclaw-sessions*")
-       (openclaw-sessions-refresh))
+     ;; A run may have ended while disconnected, so take the busy
+     ;; state from the fresh session list.
+     (openclaw-sessions-refresh nil #'openclaw--sync-busy)
      (dolist (buf (buffer-list))
        (with-current-buffer buf
          (when (and (derived-mode-p 'openclaw-chat-mode) openclaw--session-key)
@@ -442,10 +443,11 @@
         (goto-char (point-min))
         (forward-line (1- line))))))
 
-(defun openclaw-sessions-refresh (&optional fit)
+(defun openclaw-sessions-refresh (&optional fit callback)
   "Reload sessions and groups from the gateway.
 With FIT (interactively, `g'), also resize the sidebar to its content.
-Automatic refreshes don't resize, so the window doesn't jump around."
+Automatic refreshes don't resize, so the window doesn't jump around.
+CALLBACK, if non-nil, is called once the sessions are loaded."
   (interactive (list t))
   (openclaw-request "sessions.groups.list" nil
                     (lambda (ok res)
@@ -458,7 +460,8 @@ Automatic refreshes don't resize, so the window doesn't jump around."
                                                   openclaw--sessions-defaults (plist-get res :defaults))
                                             (openclaw--render-sidebar)
                                             (force-mode-line-update t) ; chat header lines
-                                            (when fit (openclaw--sidebar-fit))))))))
+                                            (when fit (openclaw--sidebar-fit))
+                                            (when callback (funcall callback))))))))
 
 (defun openclaw--sessions-on-event (event _payload)
   (when (and (equal event "sessions.changed")
@@ -733,6 +736,14 @@ else the context window."
   (when (and busy (not openclaw--blink-timer))
     (setq openclaw--blink-timer (run-with-timer 0 0.5 #'openclaw--blink)))
   (force-mode-line-update))
+
+(defun openclaw--sync-busy ()
+  "Set each chat's busy state from its session's status."
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when (and (derived-mode-p 'openclaw-chat-mode) openclaw--session-key)
+        (openclaw--set-busy
+         (equal (plist-get (openclaw--chat-session) :status) "running"))))))
 
 (defun openclaw--blink ()
   "Toggle the blink phase and redraw busy header lines only.
