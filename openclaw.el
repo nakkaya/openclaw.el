@@ -827,6 +827,8 @@ Prose is filled to `fill-column'; tables and code extend sideways."
                     x))
                 font-lock-defaults))
   (setq-local fill-column openclaw-fill-column)
+  ;; Highlight code blocks with their language's major mode.
+  (setq-local markdown-fontify-code-blocks-natively t)
   (setq-local header-line-format '((:eval (openclaw--header-line))))
   (add-hook 'fill-nobreak-predicate #'openclaw--fill-nobreak-p nil t)
   (add-hook 'post-command-hook #'openclaw--pin-bottom nil t)

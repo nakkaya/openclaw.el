@@ -143,6 +143,20 @@
                                (overlays-in (point-min) (point-max)))))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-code-highlighting ()
+  "Code blocks are highlighted by their language's major mode."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "hl")
+     (openclaw--chat-render
+      (list (list :role "assistant"
+                  :content "Here:\n\n```emacs-lisp\n(defun fib (n) n)\n```\n")))
+     (font-lock-ensure)
+     (goto-char (point-min))
+     (search-forward "(defun")
+     (should (memq 'font-lock-keyword-face
+                   (ensure-list (get-text-property (1- (point)) 'face))))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-tool-summary ()
   (should (equal (openclaw--tool-summary "exec" '(:command "ls -la")) "⚙ Terminal"))
   (should (equal (openclaw--tool-summary "web_search" '(:query "q")) "⚙ Search"))
