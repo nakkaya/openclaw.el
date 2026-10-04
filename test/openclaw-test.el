@@ -804,12 +804,16 @@ expanded, it has the body's, as it then starts the body's first line."
   (let ((openclaw--groups (list (list :name "Work")))
         (openclaw--sessions (list (list :key "a" :displayName "Alpha" :category "Work")
                                   (list :key "b" :displayName "Beta" :parentSessionKey "a")
-                                  (list :key "c" :displayName "Gamma" :status "failed"))))
+                                  (list :key "c" :displayName "Gamma" :status "failed")
+                                  (list :key "d" :displayName "Delta" :unread t))))
     (get-buffer-create "*openclaw-sessions*")
     (openclaw--render-sidebar)
     (with-current-buffer "*openclaw-sessions*"
       (should (string-match-p "Work" (buffer-string)))
-      (should (string-match-p "× Gamma" (buffer-string)))))
+      (should (string-match-p "× Gamma" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "Delta")
+      (should (eq (get-text-property (1- (point)) 'font-lock-face) 'font-lock-builtin-face))))
   (openclaw-test--kill-sidebar))
 
 (ert-deftest openclaw-test-sidebar-empty ()

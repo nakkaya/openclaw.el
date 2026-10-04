@@ -489,7 +489,7 @@ is gone.  Also catches a handshake that never completes."
             ("failed" (propertize "× " 'font-lock-face 'error))
             (_ "  "))
           (propertize (openclaw--session-name s)
-                      'font-lock-face (if (plist-get s :unread) 'bold 'default))))
+                      'font-lock-face (if (plist-get s :unread) 'font-lock-builtin-face 'default))))
 
 (defun openclaw--insert-sessions (sessions children)
   "Insert SESSIONS, each followed by its CHILDREN (key -> list)."
