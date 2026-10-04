@@ -1282,8 +1282,16 @@ they extend sideways instead of wrapping."
                (> (point) beg)
                (save-excursion (forward-line -1) (looking-at "[ \t]*$")))
           (delete-region (point) (min end (1+ (line-end-position)))))
-         ;; Blank line after a heading that runs straight into text.
-         ((and (not in-fence) (looking-at "[ \t]*#+[ \t]"))
+         ;; A long heading is split into headings of the same level
+         ;; (one can't span lines), and gets a blank line after it when
+         ;; it runs straight into text.
+         ((and (not in-fence) (looking-at "[ \t]*#+[ \t]+"))
+          (let ((fill-prefix (match-string 0))
+                (heading-end (copy-marker (line-end-position))))
+            (when (> (string-width (buffer-substring (point) heading-end)) fill-column)
+              (fill-region-as-paragraph (point) heading-end))
+            (goto-char heading-end)
+            (set-marker heading-end nil))
           (forward-line 1)
           (when (and (< (point) end) (not (looking-at "[ \t]*$")))
             (insert "\n")))

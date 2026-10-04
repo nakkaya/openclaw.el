@@ -260,6 +260,16 @@
     (should (equal (buffer-string)
                    "one two three four\nfive six seven eight\n\n# H\n\ntext\n```\na  b   c d e f g h i j k l m\n```\n"))))
 
+(ert-deftest openclaw-test-fill-long-heading ()
+  "A heading longer than the fill column is split into same-level headings,
+so it isn't left wider than the text (and centered off it)."
+  (with-temp-buffer
+    (setq fill-column 40)
+    (insert "## So: yes, if the question is \"will it be colorful\" — fixed and measured.\ntext\n")
+    (openclaw--fill-markdown (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "## So: yes, if the question is \"will it\n## be colorful\" — fixed and measured.\n\ntext\n"))))
+
 (ert-deftest openclaw-test-tilde-fences ()
   "~~~ fences are code like ``` ones: not filled, balanced, nestable."
   (let ((fill-column 40))
