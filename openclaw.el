@@ -837,6 +837,7 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (add-hook 'after-change-functions #'openclaw--center-input nil t)
   (add-function :filter-return (local 'filter-buffer-substring-function)
                 #'openclaw--strip-centering)
+  (add-hook 'yank-transform-functions #'openclaw--fill-yank nil t)
   (add-hook 'window-size-change-functions #'openclaw--pin-bottom nil t)
   (add-hook 'kill-buffer-hook #'openclaw--chat-unsubscribe nil t))
 
@@ -1057,7 +1058,8 @@ Only while point is in the input area, so scrolling back still works."
         ((and (= (length args) 2) (stringp (cadr args))) (cadr args))
         (t (format "%S" args))))
 
-(defconst openclaw--tool-labels '(("exec" . "Terminal") ("web_search" . "Search"))
+(defconst openclaw--tool-labels '(("exec" . "Terminal") ("web_search" . "Search")
+                                  ("tool_call" . "Tool Call"))
   "Header labels for tools whose arguments are shown only when expanded.
 Their arguments (whole scripts, long queries) make poor one-liners.")
 
@@ -1152,6 +1154,36 @@ popups only keep prefixes that are text properties."
              (stringp line-prefix))
     (with-silent-modifications
       (put-text-property beg end 'line-prefix line-prefix))))
+
+(defun openclaw--fill-yank (string)
+  "Break the long lines of STRING yanked into the input, like typing does.
+Only with `auto-fill-mode' on, which breaks typed lines but not yanked
+ones.  Lines are only broken, never joined, and code is left alone."
+  (if (not (and auto-fill-function openclaw--input-marker
+                (>= (point) openclaw--input-marker)))
+      string
+    (let ((column fill-column)
+          ;; The first line continues after the prompt or earlier input.
+          (lead (make-string (current-column) ?.)))
+      (with-temp-buffer
+        (setq fill-column column)
+        (setq-local fill-nobreak-predicate '(openclaw--fill-nobreak-p))
+        (insert lead string)
+        (goto-char (point-min))
+        (let (fence)
+          (while (not (eobp))
+            (let ((next (openclaw--fence-step fence)))
+              (when (and (not fence) (not next)
+                         (not (looking-at "[ \t]")) ; indented code
+                         (> (string-width (buffer-substring (point) (line-end-position)))
+                            fill-column))
+                (let ((end (copy-marker (line-end-position))))
+                  (fill-region-as-paragraph (point) end)
+                  (goto-char end)
+                  (set-marker end nil)))
+              (setq fence next))
+            (forward-line 1)))
+        (buffer-substring (1+ (length lead)) (point-max))))))
 
 (defun openclaw--strip-centering (text)
   "Remove the centering properties from copied TEXT.
@@ -1886,7 +1918,8 @@ With prefix argument REMOVE, remove a staged attachment instead."
           (setq openclaw--turn-start (point-marker)))
         (let ((start (point)))
           (openclaw--insert-header "user")
-          (insert text "\n")
+          ;; Formatted like the stored message that replaces it.
+          (insert (openclaw--format (concat (openclaw--close-fences text) "\n")))
           (openclaw--insert-attachment-lines
            (mapcar (lambda (a) (cons (plist-get a :name) (plist-get a :size))) attachments))
           (insert "\n")

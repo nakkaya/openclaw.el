@@ -160,6 +160,7 @@
 (ert-deftest openclaw-test-tool-summary ()
   (should (equal (openclaw--tool-summary "exec" '(:command "ls -la")) "⚙ Terminal"))
   (should (equal (openclaw--tool-summary "web_search" '(:query "q")) "⚙ Search"))
+  (should (equal (openclaw--tool-summary "tool_call" '(:id "mcp:x" :args (:a 1))) "⚙ Tool Call"))
   (should (equal (openclaw--tool-summary "web_fetch" '(:url "u")) "⚙ web_fetch u")))
 
 (ert-deftest openclaw-test-reload-keeps-position ()
@@ -476,6 +477,51 @@ so it isn't left wider than the text (and centered off it)."
      (should (= openclaw--input-marker (point-max)))
      (should (string-match-p "You\nquestion" (buffer-string)))
      (openclaw--set-busy nil)))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-send-fills-draft ()
+  "A long message is filled in the draft, as in the stored message."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "fd")
+     (let ((text (mapconcat #'identity (make-list 20 "pasted words") " ")))
+       (insert text)
+       (openclaw-chat-send)
+       ;; Sent as typed, shown filled.
+       (should (equal (plist-get (openclaw-test--params "chat.send") :message) text))
+       (goto-char (point-min))
+       (search-forward "pasted words")
+       (should (<= (- (line-end-position) (line-beginning-position)) fill-column))
+       (should (string-match-p "pasted words\npasted" (buffer-string))))
+     (openclaw--set-busy nil)))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-yank-fills-like-typing ()
+  "With auto-fill on, yanked long lines are broken as typed ones would be;
+short lines, line breaks and code are kept."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "yk")
+     (let* ((long (mapconcat #'identity (make-list 20 "pasted words") " "))
+            (code (concat "```\n" long "\n```"))
+            (text (concat long "\nshort line\n\n" code "\n    " long)))
+       ;; Without auto-fill: as is.
+       (auto-fill-mode -1)
+       (goto-char (point-max))
+       (kill-new text)
+       (yank)
+       (should (string-suffix-p text (buffer-string)))
+       (delete-region openclaw--input-marker (point-max))
+       ;; With auto-fill: only the prose line is broken, to fit after the prompt.
+       (auto-fill-mode 1)
+       (yank)
+       (let ((input (buffer-substring-no-properties openclaw--input-marker (point-max))))
+         (should (string-match-p "\nshort line\n\n```\n" input))
+         (should (string-search code input))
+         (should (string-suffix-p (concat "\n    " long) input))
+         (should (equal (replace-regexp-in-string "\n" " " (substring input 0 (string-search "\nshort" input)))
+                        long)))
+       (goto-char openclaw--input-marker)
+       (should (<= (- (line-end-position) (line-beginning-position)) fill-column))
+       (auto-fill-mode -1))))
   (openclaw-test--kill-chats))
 
 (ert-deftest openclaw-test-send-while-disconnected ()
