@@ -856,6 +856,39 @@ expanded, it has the body's, as it then starts the body's first line."
   (openclaw-test--kill-chats)
   (openclaw-test--kill-sidebar))
 
+(ert-deftest openclaw-test-mark-read ()
+  "Chats on screen are marked read when shown and after new activity;
+chats not on screen stay unread."
+  (openclaw-test--with-gateway
+   (let ((shown (openclaw-test--open-chat "rd1"))
+         hidden)
+     (setq openclaw--sessions nil)
+     (openclaw-chat "rd2")
+     (setq hidden (openclaw--chat-buffer "rd2"))
+     (switch-to-buffer shown)
+     (cl-flet ((patched () (mapcar (lambda (r) (plist-get (nth 1 r) :key))
+                                   (seq-filter (lambda (r) (equal (car r) "sessions.patch"))
+                                               openclaw-test--requests))))
+       ;; New activity in both: only the shown one is marked read.
+       (setq openclaw-test--requests nil)
+       (openclaw-sessions-refresh)
+       (openclaw-test--reply "sessions.groups.list" '(:groups nil))
+       (openclaw-test--reply "sessions.list" '(:sessions ((:key "rd1" :unread t)
+                                                          (:key "rd2" :unread t))))
+       (should (equal (patched) '("rd1")))
+       (should (equal (openclaw-test--params "sessions.patch") '(:key "rd1" :unread :false)))
+       (should-not (plist-get (car openclaw--sessions) :unread))
+       ;; Already read: nothing is sent.
+       (setq openclaw-test--requests nil)
+       (with-current-buffer shown (openclaw--mark-read))
+       (should-not (patched))
+       ;; Showing the other one marks it read.
+       (switch-to-buffer hidden)
+       (openclaw--chat-shown (selected-window))
+       (should (equal (patched) '("rd2"))))))
+  (openclaw-test--kill-chats)
+  (openclaw-test--kill-sidebar))
+
 (ert-deftest openclaw-test-refresh-no-sidebar ()
   "Refreshing loads sessions but doesn't recreate a killed sidebar."
   (openclaw-test--kill-sidebar)

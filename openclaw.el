@@ -560,6 +560,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                                               (message "OpenClaw: %s" (plist-get res :message))
                                             (setq openclaw--sessions (plist-get res :sessions)
                                                   openclaw--sessions-defaults (plist-get res :defaults))
+                                            (openclaw--mark-shown-read)
                                             (when (get-buffer "*openclaw-sessions*")
                                               (openclaw--render-sidebar))
                                             (force-mode-line-update t) ; chat header lines
@@ -834,6 +835,7 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (add-hook 'post-command-hook #'openclaw--pin-bottom nil t)
   (add-hook 'window-size-change-functions #'openclaw--center-window nil t)
   (add-hook 'window-buffer-change-functions #'openclaw--center-window nil t)
+  (add-hook 'window-buffer-change-functions #'openclaw--chat-shown nil t)
   (add-hook 'after-change-functions #'openclaw--center-input nil t)
   (add-function :filter-return (local 'filter-buffer-substring-function)
                 #'openclaw--strip-centering)
@@ -1190,6 +1192,28 @@ ones.  Lines are only broken, never joined, and code is left alone."
 Yanked elsewhere, they would still indent it there."
   (remove-list-of-text-properties 0 (length text) '(line-prefix openclaw-width) text)
   text)
+
+(defun openclaw--mark-read ()
+  "Mark this chat's session read on the gateway, if it is unread."
+  (when-let* ((s (openclaw--chat-session))
+              ((plist-get s :unread))
+              ((openclaw-connected-p)))
+    ;; Locally too, so the sidebar isn't bold until the next refresh.
+    (plist-put s :unread nil)
+    (openclaw-request "sessions.patch" `(:key ,openclaw--session-key :unread :false))))
+
+(defun openclaw--chat-shown (window)
+  "Mark the chat shown in WINDOW read: it is being read."
+  (with-current-buffer (window-buffer window)
+    (openclaw--mark-read)))
+
+(defun openclaw--mark-shown-read ()
+  "Mark the chats shown in a window read, e.g. after new messages.
+Chats not shown are left unread."
+  (dolist (buf (buffer-list))
+    (when (and (buffer-local-value 'openclaw--session-key buf)
+               (get-buffer-window buf 'visible))
+      (with-current-buffer buf (openclaw--mark-read)))))
 
 (defun openclaw--center-window (window)
   "Re-center the chat shown in WINDOW, e.g. after a resize."
