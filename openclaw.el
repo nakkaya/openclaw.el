@@ -842,6 +842,7 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (add-function :filter-return (local 'filter-buffer-substring-function)
                 #'openclaw--strip-centering)
   (add-hook 'yank-transform-functions #'openclaw--fill-yank nil t)
+  (add-hook 'completion-at-point-functions #'openclaw--command-capf nil t)
   (add-hook 'window-size-change-functions #'openclaw--pin-bottom nil t)
   (add-hook 'kill-buffer-hook #'openclaw--chat-unsubscribe nil t))
 
@@ -1812,6 +1813,41 @@ missing newlines (display only) until the stored messages replace it."
   (when (and openclaw--session-key (openclaw-connected-p))
     (openclaw-request "sessions.messages.unsubscribe" `(:key ,openclaw--session-key))))
 
+(defvar-local openclaw--commands nil
+  "Slash commands of this chat's session, from commands.list.")
+
+(defun openclaw--load-commands ()
+  "Fetch the slash commands this chat accepts."
+  (let ((buf (current-buffer))
+        (agent (or (plist-get (openclaw--chat-session) :agentId)
+                   (plist-get openclaw--agents :defaultId))))
+    (openclaw-request "commands.list"
+                      `(,@(when agent `(:agentId ,agent))
+                        :sessionKey ,openclaw--session-key :scope "text")
+                      (lambda (ok res)
+                        (when (and ok (buffer-live-p buf))
+                          (with-current-buffer buf
+                            (setq openclaw--commands (plist-get res :commands))))))))
+
+(defun openclaw--command-capf ()
+  "Complete a slash command at the start of the input."
+  (when (and openclaw--input-marker (>= (point) openclaw--input-marker))
+    (let ((start (save-excursion
+                   (goto-char openclaw--input-marker)
+                   (skip-chars-forward " \t\n")
+                   (point))))
+      (when (and (eq (char-after start) ?/)
+                 (string-match-p "\\`/[^ \t\n]*\\'"
+                                 (buffer-substring-no-properties start (point))))
+        (let ((descs (cl-loop for c in openclaw--commands
+                              append (mapcar (lambda (a) (cons a (plist-get c :description)))
+                                             (plist-get c :textAliases)))))
+          (list start (point) (mapcar #'car descs)
+                :annotation-function
+                (lambda (a) (when-let* ((d (cdr (assoc a descs))))
+                              (concat "  " (propertize d 'face 'shadow))))
+                :exclusive 'no))))))
+
 (defun openclaw-chat (key)
   "Open the chat buffer for session KEY."
   ;; A new buffer needs the gateway to load; fail before creating it.
@@ -1830,6 +1866,7 @@ missing newlines (display only) until the stored messages replace it."
         (set-marker-insertion-type openclaw--live-marker t)
         (openclaw-request "sessions.messages.subscribe" `(:key ,key))
         (openclaw-chat-reload)
+        (openclaw--load-commands)
         ;; Already mid-run (e.g. started elsewhere): blink from the start.
         (when (equal (plist-get session :status) "running")
           (openclaw--set-busy t))))

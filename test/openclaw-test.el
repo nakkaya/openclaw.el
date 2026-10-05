@@ -267,6 +267,24 @@
          (should (equal (openclaw--permission-mode) "Full Access")))))
     (openclaw-test--kill-chats)))
 
+(ert-deftest openclaw-test-command-completion ()
+  "Slash commands from commands.list complete at the start of the input."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "cmd")
+     (should (equal (plist-get (openclaw-test--params "commands.list") :sessionKey) "cmd"))
+     (openclaw-test--reply "commands.list"
+                           '(:commands ((:textAliases ("/compact") :description "Compact")
+                                        (:textAliases ("/think" "/t") :description "Think"))))
+     (goto-char (point-max))
+     (insert "/co")
+     (let ((capf (openclaw--command-capf)))
+       (should (equal (all-completions "/co" (nth 2 capf)) '("/compact")))
+       (should (string-match-p "Think" (funcall (plist-get (nthcdr 3 capf) :annotation-function) "/t"))))
+     ;; Only as the first word of the message.
+     (insert " /t")
+     (should-not (openclaw--command-capf))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-message-navigation ()
   "C-<up>/C-<down> move between the messages you sent."
   (openclaw-test--with-gateway
