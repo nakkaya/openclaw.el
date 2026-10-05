@@ -326,7 +326,16 @@
     (insert "one two three four five six seven eight\n\n\n# H\ntext\n```\na  b   c d e f g h i j k l m\n```\n")
     (openclaw--fill-markdown (point-min) (point-max))
     (should (equal (buffer-string)
-                   "one two three four\nfive six seven eight\n\n# H\n\ntext\n```\na  b   c d e f g h i j k l m\n```\n"))))
+                   "one two three four\nfive six seven eight\n\n# H\n\ntext\n\n```\na  b   c d e f g h i j k l m\n```\n"))))
+
+(ert-deftest openclaw-test-fill-code-block-spacing ()
+  "A code block gets a blank line before and after if it has none."
+  (with-temp-buffer
+    (setq fill-column 40)
+    (insert "**1. helper**\n```clojure\n(defn f [])\n```\nIt lives here.\n\n```\nx\n```\n\nend\n")
+    (openclaw--fill-markdown (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "**1. helper**\n\n```clojure\n(defn f [])\n```\n\nIt lives here.\n\n```\nx\n```\n\nend\n"))))
 
 (ert-deftest openclaw-test-fill-long-heading ()
   "A heading longer than the fill column is split into same-level headings,
@@ -347,7 +356,7 @@ so it isn't left wider than the text (and centered off it)."
       (openclaw--fill-markdown (point-min) (point-max))
       (should (string-prefix-p "~~~~\nsome thinking text that is long enough to be filled at forty\n"
                                (buffer-string)))
-      (should (string-match-p "^~~~~\nafter" (buffer-string))))
+      (should (string-match-p "^~~~~\n\nafter" (buffer-string))))
     ;; A ``` inside ~~~~ (or the other way round) doesn't toggle code.
     (should (equal (openclaw--close-fences "```\n~~~~\nx\n```") "```\n~~~~\nx\n```"))
     (should (equal (openclaw--close-fences "~~~~\n```\nx\n~~~~") "~~~~\n```\nx\n~~~~"))

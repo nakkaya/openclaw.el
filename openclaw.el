@@ -1390,9 +1390,16 @@ they extend sideways instead of wrapping."
       (goto-char beg)
       (while (< (point) end)
         (cond
+         ;; Code blocks get a blank line before and after, for air.
          ((or in-fence (looking-at openclaw--fence-regexp))
-          (setq in-fence (openclaw--fence-step in-fence))
-          (forward-line 1))
+          (let ((open in-fence))
+            (when (and (not open) (> (point) beg)
+                       (save-excursion (forward-line -1) (not (looking-at "[ \t]*$"))))
+              (insert "\n"))
+            (setq in-fence (openclaw--fence-step open))
+            (forward-line 1)
+            (when (and open (not in-fence) (< (point) end) (not (looking-at "[ \t]*$")))
+              (insert "\n"))))
          ;; Collapse runs of blank lines (outside code) to one.
          ((and (not in-fence)
                (looking-at "[ \t]*$")
