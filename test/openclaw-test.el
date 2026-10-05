@@ -192,7 +192,7 @@
       (should (equal (openclaw--user-name) "Me")))
     (openclaw-test--with-gateway
      (with-current-buffer (openclaw-test--open-chat "u1")
-       (should (string-match-p "^El Nuro\nmessage number 0" (buffer-string)))))
+       (should (string-match-p "^El Nuro\n\nmessage number 0" (buffer-string)))))
     (openclaw-test--kill-chats)))
 
 (ert-deftest openclaw-test-header-and-usage ()
@@ -291,30 +291,30 @@
    (with-current-buffer (openclaw-test--open-chat "nav") ; you sent the even ones
      (should (eq (key-binding (kbd "C-<up>")) 'openclaw-chat-previous-message))
      (should (eq (key-binding (kbd "C-<down>")) 'openclaw-chat-next-message))
-     (cl-flet ((here () (buffer-substring-no-properties (point) (line-end-position 2))))
+     (cl-flet ((here () (buffer-substring-no-properties (point) (line-end-position 3))))
        (goto-char (point-max))
        (insert "draft")
        ;; From the input: the last message you sent.
        (openclaw-chat-previous-message)
-       (should (equal (here) "You\nmessage number 58 with some text"))
+       (should (equal (here) "You\n\nmessage number 58 with some text"))
        (openclaw-chat-previous-message)
-       (should (equal (here) "You\nmessage number 56 with some text"))
+       (should (equal (here) "You\n\nmessage number 56 with some text"))
        ;; From inside a message's text.
        (forward-line 1) (forward-char 5)
        (openclaw-chat-previous-message)
-       (should (equal (here) "You\nmessage number 56 with some text"))
+       (should (equal (here) "You\n\nmessage number 56 with some text"))
        (forward-line 1) (forward-char 5)
        (openclaw-chat-next-message)
-       (should (equal (here) "You\nmessage number 58 with some text"))
+       (should (equal (here) "You\n\nmessage number 58 with some text"))
        ;; Past the last one: back to the input.
        (openclaw-chat-next-message)
        (should (= (point) (point-max)))
        ;; Top edge.
        (goto-char (point-min))
-       (should (equal (here) "You\nmessage number 0 with some text"))
+       (should (equal (here) "You\n\nmessage number 0 with some text"))
        (should-error (openclaw-chat-previous-message) :type 'user-error)
        (openclaw-chat-next-message)
-       (should (equal (here) "You\nmessage number 2 with some text"))
+       (should (equal (here) "You\n\nmessage number 2 with some text"))
        (should (string-suffix-p "draft" (buffer-string))))))
   (openclaw-test--kill-chats))
 
@@ -410,6 +410,14 @@ so it isn't left wider than the text (and centered off it)."
      (openclaw--chat-on-event "agent" '(:sessionKey "k3" :stream "lifecycle" :data (:phase "end")))
      (should-not openclaw--busy)
      (should (openclaw-test--request "chat.history"))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-stream-header-blank-line ()
+  "One blank line after the header, even if the reply starts with newlines."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "hb")
+     (openclaw--chat-on-event "agent" '(:sessionKey "hb" :stream "assistant" :data (:delta "\n\nHello")))
+     (should (string-match-p "openclaw\n\nHello\n" (buffer-string)))))
   (openclaw-test--kill-chats))
 
 (ert-deftest openclaw-test-stream-after-reload ()
@@ -544,7 +552,7 @@ so it isn't left wider than the text (and centered off it)."
      (should openclaw--busy)
      (should (equal (plist-get (openclaw-test--params "chat.send") :message) "question"))
      (should (= openclaw--input-marker (point-max)))
-     (should (string-match-p "You\nquestion" (buffer-string)))
+     (should (string-match-p "You\n\nquestion" (buffer-string)))
      (openclaw--set-busy nil)))
   (openclaw-test--kill-chats))
 
@@ -703,7 +711,7 @@ short lines, line breaks and code are kept."
          ;; Staged files are cleared; the draft shows them.
          (should-not openclaw--attachments)
          (should-not openclaw--attachments-overlay)
-         (should (string-match-p "You\nWhat is the secret word\\?\n\n📎 secret.txt (28 B)\n📎 pic.png (11 B)\n"
+         (should (string-match-p "You\n\nWhat is the secret word\\?\n\n📎 secret.txt (28 B)\n📎 pic.png (11 B)\n"
                                  (buffer-string)))
          ;; A failed send puts the text and files back.
          (funcall (nth 2 (openclaw-test--request "chat.send")) nil '(:message "connection lost"))
@@ -715,7 +723,7 @@ short lines, line breaks and code are kept."
                       :__openclaw '(:id "u1" :media ((:fileName "secret.txt" :sizeBytes 28
                                                       :contentType "text/plain"))))
                 (list :role "assistant" :content "PELICAN" :__openclaw '(:id "a1"))))
-         (should (string-match-p "You\nWhat is the secret word\\?\n\n📎 secret.txt (28 B)\n\n"
+         (should (string-match-p "You\n\nWhat is the secret word\\?\n\n📎 secret.txt (28 B)\n\n"
                                  (buffer-string)))
          ;; Staged files survive the re-render.
          (should (overlay-buffer openclaw--attachments-overlay))))))

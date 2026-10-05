@@ -1110,10 +1110,11 @@ Only while point is in the input area, so scrolling back still works."
                  (buffer-list))))
 
 (defun openclaw--insert-header (role)
-  "Insert the message header for ROLE."
+  "Insert the message header for ROLE, with a blank line after it.
+Message text is trimmed, so it never brings a blank line of its own."
   (insert (propertize (if (equal role "user") (openclaw--user-name) (openclaw--agent-name))
                       'font-lock-face (if (equal role "user") 'openclaw-user 'openclaw-assistant))
-          "\n"))
+          "\n\n"))
 
 (defun openclaw--tool-args-text (args)
   "ARGS as text: a lone string field (e.g. a command) is shown as is."
@@ -1778,7 +1779,7 @@ missing newlines (display only) until the stored messages replace it."
                               ;; newlines, so re-protect the whole block.
                               (setq openclaw--live-text (concat openclaw--live-text d))
                               (delete-region openclaw--live-text-start (point))
-                              (insert (openclaw--format openclaw--live-text))
+                              (insert (openclaw--format (string-trim-left openclaw--live-text)))
                               (add-text-properties openclaw--live-text-start (point)
                                                    '(read-only t front-sticky t
                                                      rear-nonsticky t))
