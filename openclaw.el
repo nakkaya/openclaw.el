@@ -1808,6 +1808,12 @@ Windows scrolled back into the transcript keep their place."
          (input (buffer-substring-no-properties openclaw--input-marker (point-max)))
          (at-end (>= (point) openclaw--input-marker))
          (here (openclaw--line-col (point)))
+         ;; Erasing would move the mark to the top, so a later region
+         ;; (e.g. shift-click) would span the whole transcript.
+         (mark-at (when-let* ((m (mark t)))
+                    (if (>= m openclaw--input-marker)
+                        (- m openclaw--input-marker)
+                      (openclaw--line-col m))))
          (views (cl-loop for w in (get-buffer-window-list nil nil t)
                          unless (>= (window-point w) openclaw--input-marker)
                          collect (list w (openclaw--line-col (window-start w))
@@ -1835,6 +1841,11 @@ Windows scrolled back into the transcript keep their place."
     (if at-end
         (openclaw--goto-end)
       (goto-char (openclaw--line-col-pos here)))
+    (when mark-at
+      (set-marker (mark-marker)
+                  (if (integerp mark-at)
+                      (min (point-max) (+ openclaw--input-marker mark-at))
+                    (openclaw--line-col-pos mark-at))))
     (pcase-dolist (`(,w ,start ,pt) views)
       (set-window-start w (openclaw--line-col-pos start) t)
       (set-window-point w (openclaw--line-col-pos pt)))))

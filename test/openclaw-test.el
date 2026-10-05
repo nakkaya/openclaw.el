@@ -182,6 +182,32 @@
    (should (= (point) (point-max))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-reload-keeps-mark ()
+  "Reloading keeps the mark in place instead of moving it to the top."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "k1")
+     (goto-char (point-min))
+     (forward-line 9)
+     (forward-char 3)
+     (set-marker (mark-marker) (point))
+     (let ((line (line-number-at-pos)) (col (current-column)))
+       (goto-char (point-max))
+       (openclaw-chat-reload)
+       (openclaw-test--reply "chat.history" (list :messages (openclaw-test--messages 62)))
+       (save-excursion
+         (goto-char (mark t))
+         (should (= (line-number-at-pos) line))
+         (should (= (current-column) col)))
+       (should-not (region-active-p)))
+     ;; In the input: the same offset into it.
+     (goto-char (point-max))
+     (insert "draft")
+     (set-marker (mark-marker) (+ openclaw--input-marker 2))
+     (openclaw-chat-reload)
+     (openclaw-test--reply "chat.history" (list :messages (openclaw-test--messages 64)))
+     (should (= (mark t) (+ openclaw--input-marker 2)))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-user-name ()
   (let ((openclaw--profiles nil) (openclaw-user-name nil))
     (should (equal (openclaw--user-name) "You"))
