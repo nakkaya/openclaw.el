@@ -1998,6 +1998,17 @@ missing newlines (display only) until the stored messages replace it."
 
 (add-hook 'openclaw-event-functions #'openclaw--chat-on-event)
 
+(defun openclaw--chat-on-message (event payload)
+  "Show a message added to an open chat outside a run, e.g. a reminder.
+EVENT is \"session.message\" with PAYLOAD naming the session.  During a
+run the new messages are fetched when it ends."
+  (when (equal event "session.message")
+    (when-let* ((buf (openclaw--chat-buffer (plist-get payload :sessionKey))))
+      (with-current-buffer buf
+        (unless openclaw--busy (openclaw--chat-update))))))
+
+(add-hook 'openclaw-event-functions #'openclaw--chat-on-message)
+
 (defun openclaw--chat-unsubscribe ()
   "Unsubscribe from this chat's session messages."
   (when (and openclaw--session-key (openclaw-connected-p))

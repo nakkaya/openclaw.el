@@ -485,6 +485,33 @@ so it isn't left wider than the text (and centered off it)."
        (should (= (point) (point-max))))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-message-outside-run ()
+  "A message added without a run here (e.g. a reminder) is fetched and shown."
+  (openclaw-test--with-gateway
+   (let ((old (openclaw-test--turn 1)))
+     (setq openclaw--sessions (list (list :key "m1" :displayName "m1")))
+     (openclaw-chat "m1")
+     (openclaw-test--reply "chat.history" (list :messages old :deltaCursor "c1"))
+     (with-current-buffer (openclaw--chat-buffer "m1")
+       (setq openclaw-test--requests nil)
+       ;; During a run: left for the end of the run.
+       (setq openclaw--busy t)
+       (openclaw--chat-on-message "session.message" '(:sessionKey "m1"))
+       (should-not (openclaw-test--request "chat.history"))
+       (setq openclaw--busy nil)
+       ;; Other sessions are ignored.
+       (openclaw--chat-on-message "session.message" '(:sessionKey "other"))
+       (should-not (openclaw-test--request "chat.history"))
+       (openclaw--chat-on-message "session.message" '(:sessionKey "m1"))
+       (should (equal (plist-get (openclaw-test--params "chat.history") :cursor) "c1"))
+       (openclaw-test--reply "chat.history"
+                             '(:kind "delta" :deltaCursor "c2"
+                               :messages ((:message (:role "assistant"
+                                                     :content ((:type "text" :text "Reminder: stretch")))))))
+       (should (string-match-p "Reminder: stretch" (buffer-string)))
+       (should (equal openclaw--history-cursor "c2")))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-delta-reset-reloads ()
   "A stale cursor (\"reset\") reloads the whole transcript."
   (openclaw-test--with-gateway
