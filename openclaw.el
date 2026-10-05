@@ -19,10 +19,13 @@
 ;;   2. M-x openclaw-generate-device-key
 ;;   3. M-x openclaw-connect, then approve the pairing request in the
 ;;      web UI and connect again.
-;;   4. M-x openclaw opens the sessions sidebar.
+;;   4. M-x openclaw opens the sessions sidebar and the home view.
 ;;
 ;; Generate a separate key on each machine (step 2); each is approved
 ;; once and can be revoked on its own.
+;;
+;; Home view (*openclaw*): the agent's name in big letters and the five
+;; most recent sessions.  RET or mouse-1 opens one, g refreshes.
 ;;
 ;; Sessions sidebar (*openclaw-sessions*):
 ;;
@@ -564,6 +567,8 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                                             (openclaw--mark-shown-read)
                                             (when (get-buffer "*openclaw-sessions*")
                                               (openclaw--render-sidebar))
+                                            (when (get-buffer "*openclaw*")
+                                              (openclaw--render-home))
                                             (force-mode-line-update t) ; chat header lines
                                             (when fit (openclaw--sidebar-fit))
                                             (when callback (funcall callback))))))))
@@ -604,12 +609,177 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
     `((side . left) (slot . 0) (window-width . openclaw--sidebar-fit)
       (window-parameters . ((no-delete-other-windows . t)))))))
 
+(defun openclaw--start ()
+  "Show the home view and the sessions sidebar."
+  (openclaw-home)
+  (openclaw-sidebar))
+
 (defun openclaw ()
-  "Connect to OpenClaw and show the sessions sidebar."
+  "Connect to OpenClaw and show the home view and the sessions sidebar."
   (interactive)
   (if (openclaw-connected-p)
-      (openclaw-sidebar)
-    (openclaw-connect #'openclaw-sidebar)))
+      (openclaw--start)
+    (openclaw-connect #'openclaw--start)))
+
+;;;; Home view
+
+(defconst openclaw--banner-font
+  '((?A " ### " "#   #" "#####" "#   #" "#   #")
+    (?B "#### " "#   #" "#### " "#   #" "#### ")
+    (?C " ####" "#    " "#    " "#    " " ####")
+    (?D "#### " "#   #" "#   #" "#   #" "#### ")
+    (?E "#####" "#    " "#### " "#    " "#####")
+    (?F "#####" "#    " "#### " "#    " "#    ")
+    (?G " ####" "#    " "#  ##" "#   #" " ####")
+    (?H "#   #" "#   #" "#####" "#   #" "#   #")
+    (?I "#####" "  #  " "  #  " "  #  " "#####")
+    (?J "#####" "   # " "   # " "#  # " " ##  ")
+    (?K "#   #" "#  # " "###  " "#  # " "#   #")
+    (?L "#    " "#    " "#    " "#    " "#####")
+    (?M "#   #" "## ##" "# # #" "#   #" "#   #")
+    (?N "#   #" "##  #" "# # #" "#  ##" "#   #")
+    (?O " ### " "#   #" "#   #" "#   #" " ### ")
+    (?P "#### " "#   #" "#### " "#    " "#    ")
+    (?Q " ### " "#   #" "# # #" "#  # " " ## #")
+    (?R "#### " "#   #" "#### " "#  # " "#   #")
+    (?S " ####" "#    " " ### " "    #" "#### ")
+    (?T "#####" "  #  " "  #  " "  #  " "  #  ")
+    (?U "#   #" "#   #" "#   #" "#   #" " ### ")
+    (?V "#   #" "#   #" "#   #" " # # " "  #  ")
+    (?W "#   #" "#   #" "# # #" "## ##" "#   #")
+    (?X "#   #" " # # " "  #  " " # # " "#   #")
+    (?Y "#   #" " # # " "  #  " "  #  " "  #  ")
+    (?Z "#####" "   # " "  #  " " #   " "#####")
+    (?0 " ### " "#  ##" "# # #" "##  #" " ### ")
+    (?1 "  #  " " ##  " "  #  " "  #  " " ### ")
+    (?2 " ### " "#   #" "  ## " " #   " "#####")
+    (?3 "#### " "    #" " ### " "    #" "#### ")
+    (?4 "#   #" "#   #" "#####" "    #" "    #")
+    (?5 "#####" "#    " "#### " "    #" "#### ")
+    (?6 " ### " "#    " "#### " "#   #" " ### ")
+    (?7 "#####" "    #" "   # " "  #  " "  #  ")
+    (?8 " ### " "#   #" " ### " "#   #" " ### ")
+    (?9 " ### " "#   #" " ####" "    #" " ### ")
+    (?. " " " " " " " " "#")
+    (?- "   " "   " "###" "   " "   ")
+    (?\s "  " "  " "  " "  " "  "))
+  "Five-row glyphs for the home banner; # is drawn as a block.")
+
+(defun openclaw--banner (text)
+  "TEXT in big letters as a list of lines, or nil if a letter has no glyph."
+  (let ((glyphs (mapcar (lambda (c) (cdr (assq (upcase c) openclaw--banner-font))) text)))
+    (unless (memq nil glyphs)
+      (mapcar (lambda (row)
+                (string-replace "#" "█" (mapconcat (lambda (g) (nth row g)) glyphs " ")))
+              (number-sequence 0 4)))))
+
+(defun openclaw--age (ms)
+  "How long ago the epoch time MS (milliseconds) was, e.g. \"3h ago\"."
+  (let ((s (- (float-time) (/ ms 1000.0))))
+    (cond ((< s 60) "just now")
+          ((< s 3600) (format "%dm ago" (/ s 60)))
+          ((< s 86400) (format "%dh ago" (/ s 3600)))
+          (t (format "%dd ago" (/ s 86400))))))
+
+(defvar-keymap openclaw-home-mode-map
+  "RET" #'openclaw-home-visit
+  "<down-mouse-1>" #'openclaw-home-mouse-visit
+  "<mouse-1>" #'ignore
+  "<drag-mouse-1>" #'ignore
+  "n" #'next-line
+  "p" #'previous-line)
+
+(define-derived-mode openclaw-home-mode special-mode "OpenClaw"
+  "Agent banner and recent sessions."
+  (setq-local revert-buffer-function (lambda (&rest _) (openclaw-sessions-refresh)))
+  (add-hook 'window-size-change-functions #'openclaw--home-center nil t))
+
+(defvar-local openclaw--home-pad nil
+  "Overlay holding the blank lines above the home view.")
+
+(defun openclaw--home-center (window)
+  "Pad the home view so it is centered vertically in WINDOW."
+  (with-current-buffer (window-buffer window)
+    (unless openclaw--home-pad
+      (setq openclaw--home-pad (make-overlay (point-min) (point-min))))
+    (overlay-put openclaw--home-pad 'before-string
+                 (make-string (max 0 (/ (- (window-body-height window)
+                                           (count-lines (point-min) (point-max)))
+                                        2))
+                              ?\n))))
+
+(defun openclaw--insert-centered (lines)
+  "Insert LINES as one block centered in the window."
+  (let* ((width (apply #'max 0 (mapcar #'string-width lines)))
+         (pad (propertize " " 'display `(space :align-to (- center ,(/ width 2))))))
+    (dolist (l lines)
+      (insert pad l "\n"))))
+
+(defvar openclaw-fill-column)
+
+(defun openclaw--render-home ()
+  "Redraw the home view from the last session list."
+  (with-current-buffer (get-buffer-create "*openclaw*")
+    (let* ((inhibit-read-only t)
+           (line (line-number-at-pos))
+           (name (openclaw--agent-name))
+           (banner (openclaw--banner name))
+           (recent (seq-take (sort (seq-remove (lambda (s) (or (plist-get s :archived)
+                                                               (plist-get s :isBackground)))
+                                               openclaw--sessions)
+                                   (lambda (a b) (> (or (plist-get a :updatedAt) 0)
+                                                    (or (plist-get b :updatedAt) 0))))
+                             5))
+           (lines (mapcar #'openclaw--session-line recent))
+           (width (apply #'max 0 (mapcar #'string-width lines))))
+      (unless (derived-mode-p 'openclaw-home-mode) (openclaw-home-mode))
+      (erase-buffer)
+      (openclaw--insert-centered
+       (mapcar (lambda (l) (propertize l 'face 'font-lock-keyword-face))
+               (if (and banner (<= (string-width (car banner)) openclaw-fill-column))
+                   banner
+                 (list name))))
+      (insert "\n\n")
+      (openclaw--insert-centered (list (propertize "Recent sessions" 'face 'bold) ""))
+      (let ((start (point)))
+        (openclaw--insert-centered
+         (cl-mapcar (lambda (s l)
+                      (propertize (concat (string-pad l width) "  "
+                                          (propertize (if-let* ((u (plist-get s :updatedAt)))
+                                                          (openclaw--age u)
+                                                        "")
+                                                      'face 'shadow))
+                                  'openclaw-session (plist-get s :key)
+                                  'mouse-face 'highlight))
+                    recent lines))
+        ;; Keep point on the same line; start on the first session.
+        (goto-char (point-min))
+        (forward-line (1- line))
+        (when (< (point) start) (goto-char start)))
+      (mapc #'openclaw--home-center (get-buffer-window-list nil nil t)))))
+
+(defun openclaw-home-visit ()
+  "Open the session on this line of the home view."
+  (interactive)
+  (openclaw-chat (or (and (< (line-beginning-position) (line-end-position))
+                          (get-text-property (1- (line-end-position)) 'openclaw-session))
+                     (user-error "No session on this line"))))
+
+(defun openclaw-home-mouse-visit (event)
+  "Open the session clicked in EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (openclaw-home-visit))
+
+(defun openclaw-home ()
+  "Show the agent banner and recent sessions in the main window."
+  (interactive)
+  (openclaw--render-home)
+  (let ((main (if (window-parameter nil 'window-side)
+                  (seq-find (lambda (w) (not (window-parameter w 'window-side))) (window-list))
+                (selected-window))))
+    (set-window-buffer main "*openclaw*")
+    (openclaw--home-center main)))
 
 (defun openclaw--section-group ()
   "Group name of the section at point, or nil."

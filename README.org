@@ -29,9 +29,15 @@ chat with your agents in Emacs.
 2. =M-x openclaw-generate-device-key= (once per machine).
 3. =M-x openclaw-connect=, approve the pairing request in the web UI,
    and connect again.
-4. =M-x openclaw= opens the sessions sidebar.
+4. =M-x openclaw= opens the sessions sidebar and the home view.
 
 * Usage
+
+** Home view
+
+The agent's name in big letters and the five most recent sessions,
+centered in the window.
+=RET= or a click opens one, =g= refreshes.
 
 ** Sessions buffer
 

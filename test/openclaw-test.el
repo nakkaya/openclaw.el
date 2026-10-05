@@ -893,6 +893,49 @@ expanded, it has the body's, as it then starts the body's first line."
       (should (eq (get-text-property (1- (point)) 'font-lock-face) 'font-lock-builtin-face))))
   (openclaw-test--kill-sidebar))
 
+(ert-deftest openclaw-test-banner ()
+  (should (equal (openclaw--banner "h.i")
+                 '("█   █   █████"
+                   "█   █     █  "
+                   "█████     █  "
+                   "█   █     █  "
+                   "█   █ █ █████")))
+  ;; No glyph for a letter: no banner.
+  (should-not (openclaw--banner "Ω")))
+
+(ert-deftest openclaw-test-home ()
+  (let* ((now (* 1000 (float-time)))
+         (openclaw-agent-name "Hi")
+         (openclaw--sessions
+          (append (list (list :key "old" :displayName "Old" :updatedAt (- now 7200000))
+                        (list :key "new" :displayName "New" :updatedAt (- now 120000))
+                        (list :key "gone" :displayName "Gone" :archived t :updatedAt now))
+                  (mapcar (lambda (i) (list :key (format "s%d" i) :displayName (format "S%d" i)
+                                            :updatedAt (- now 86400000 i)))
+                          (number-sequence 1 12))))
+         opened)
+    (openclaw--render-home)
+    (with-current-buffer "*openclaw*"
+      (should (derived-mode-p 'openclaw-home-mode))
+      (should (string-match-p "█   █ █████" (buffer-string)))
+      ;; Five most recent, newest first, archived ones left out.
+      (should (string-match-p "New +2m ago\n.*Old +2h ago\n.*S1 +1d ago" (buffer-string)))
+      (should-not (string-match-p "Gone\\|S4" (buffer-string)))
+      ;; Padded to the middle of the window: 14 lines of content.
+      (should (= (count-lines (point-min) (point-max)) 14))
+      (save-window-excursion
+        (set-window-buffer nil (current-buffer))
+        (openclaw--home-center (selected-window))
+        (should (equal (overlay-get openclaw--home-pad 'before-string)
+                       (make-string (/ (- (window-body-height) 14) 2) ?\n))))
+      ;; Point starts on the newest session; RET opens it.
+      (cl-letf (((symbol-function 'openclaw-chat) (lambda (key) (setq opened key))))
+        (openclaw-home-visit)
+        (should (equal opened "new"))
+        (goto-char (point-min))
+        (should-error (openclaw-home-visit) :type 'user-error)))
+    (kill-buffer "*openclaw*")))
+
 (ert-deftest openclaw-test-sidebar-empty ()
   "Commands on an empty sidebar give a user error."
   (with-current-buffer (get-buffer-create "*openclaw-sessions*")
