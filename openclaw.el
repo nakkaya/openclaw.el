@@ -1419,7 +1419,10 @@ ones.  Lines are only broken, never joined, and code is left alone."
       string
     (let ((column fill-column)
           ;; The first line continues after the prompt or earlier input.
-          (lead (make-string (current-column) ?.)))
+          (lead (make-string (current-column) ?.))
+          ;; Text copied from the transcript is read-only until `yank'
+          ;; strips that after inserting it.
+          (inhibit-read-only t))
       (with-temp-buffer
         (setq fill-column column)
         (setq-local fill-nobreak-predicate '(openclaw--fill-nobreak-p))

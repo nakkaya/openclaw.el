@@ -654,6 +654,26 @@ short lines, line breaks and code are kept."
        (auto-fill-mode -1))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-yank-transcript-text ()
+  "Text copied from the transcript is read-only there; pasting and filling
+it into the input still works, and the result can be edited."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "yr")
+     (let ((long (propertize (mapconcat #'identity (make-list 20 "copied words") " ")
+                             'read-only t)))
+       (auto-fill-mode 1)
+       (goto-char (point-max))
+       (kill-new long)
+       (yank)
+       (should (string-search "\n" (buffer-substring openclaw--input-marker (point-max))))
+       (insert " more")
+       (goto-char openclaw--input-marker)
+       (insert "edited ")
+       (should (string-prefix-p "edited copied"
+                                (buffer-substring openclaw--input-marker (point-max))))
+       (auto-fill-mode -1))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-send-while-disconnected ()
   "A refused send keeps the text and leaves no busy state."
   (openclaw-test--with-gateway
