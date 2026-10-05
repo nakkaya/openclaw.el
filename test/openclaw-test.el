@@ -936,6 +936,21 @@ expanded, it has the body's, as it then starts the body's first line."
         (should-error (openclaw-home-visit) :type 'user-error)))
     (kill-buffer "*openclaw*")))
 
+(ert-deftest openclaw-test-mode-line-names ()
+  ;; `format-mode-line' gives "" in batch, so look at the specs.
+  (with-current-buffer (get-buffer-create "*openclaw-sessions*")
+    (openclaw-sessions-mode)
+    (should (equal mode-line-format " Sessions")))
+  (openclaw-test--kill-sidebar)
+  (let ((openclaw--sessions (list (list :key "k1" :displayName "100% done"))))
+    (with-temp-buffer
+      (openclaw-chat-mode)
+      (setq openclaw--session-key "k1")
+      (should (equal (eval (cadr mode-line-format)) " 100%% done"))
+      ;; Renamed: the mode line follows.
+      (setq openclaw--sessions (list (list :key "k1" :displayName "Renamed")))
+      (should (equal (eval (cadr mode-line-format)) " Renamed")))))
+
 (ert-deftest openclaw-test-sidebar-empty ()
   "Commands on an empty sidebar give a user error."
   (with-current-buffer (get-buffer-create "*openclaw-sessions*")

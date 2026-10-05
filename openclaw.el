@@ -480,7 +480,8 @@ is gone.  Also catches a handshake that never completes."
 
 (define-derived-mode openclaw-sessions-mode magit-section-mode "OpenClaw-Sessions"
   "Tree of OpenClaw sessions."
-  (setq-local truncate-lines t))
+  (setq-local truncate-lines t)
+  (setq-local mode-line-format " Sessions"))
 
 (defun openclaw--session-name (s)
   "Display name of session S."
@@ -990,6 +991,9 @@ stored messages when the run ends.")
   "Chat with an OpenClaw session.
 Prose is filled to `fill-column'; tables and code extend sideways."
   (setq-local truncate-lines t)
+  ;; The session name alone, following renames.
+  (setq-local mode-line-format
+              '(:eval (concat " " (string-replace "%" "%%" (openclaw--chat-title)))))
   ;; markdown-mode lets font-lock strip `rear-nonsticky', which would
   ;; make the read-only prompt sticky and block typing after it.  It
   ;; comes from `font-lock-defaults', applied when font-lock starts.
@@ -1028,6 +1032,12 @@ there) is used; set attributes here to override it.")
   "Session plist of the current chat buffer."
   (seq-find (lambda (s) (equal (plist-get s :key) openclaw--session-key))
             openclaw--sessions))
+
+(defun openclaw--chat-title ()
+  "Name of the current chat's session."
+  (if-let* ((session (openclaw--chat-session)))
+      (openclaw--session-name session)
+    (or openclaw--session-key "")))
 
 (defun openclaw--model-name (provider model)
   "Display name of PROVIDER's MODEL: the gateway's, else \"provider/model\"."
