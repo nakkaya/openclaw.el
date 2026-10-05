@@ -232,6 +232,41 @@
        (should (equal (openclaw--session-model) "solo/solo"))))
     (openclaw-test--kill-chats)))
 
+(ert-deftest openclaw-test-header-permission-mode ()
+  "The header shows the session's permission mode, else the agent's default."
+  (let ((openclaw--agents '(:defaultId "a" :agents ((:id "a" :defaultPermissionMode "full")))))
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "pm")
+       (should (string-match-p "  Full Access" (openclaw--header-line)))
+       (setq openclaw--sessions (list (list :key "pm" :permissionMode "read-only")))
+       (should (equal (openclaw--permission-mode) "Read Only"))
+       (let ((openclaw--agents nil))
+         (setq openclaw--sessions (list (list :key "pm")))
+         (should-not (openclaw--permission-mode)))))
+    (openclaw-test--kill-chats)))
+
+(ert-deftest openclaw-test-set-permission ()
+  "C-c C-r patches the mode; \"agent default\" clears it."
+  (let ((openclaw--agents '(:defaultId "a" :agents ((:id "a" :defaultPermissionMode "full")))))
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "sp")
+       (should (eq (key-binding (kbd "C-c C-r")) 'openclaw-chat-set-permission))
+       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Guarded"))
+                 ((symbol-function 'openclaw-sessions-refresh) #'ignore))
+         (openclaw-chat-set-permission)
+         (should (equal (openclaw-test--params "sessions.patch")
+                        '(:key "sp" :permissionMode "guarded")))
+         (openclaw-test--reply "sessions.patch" nil)
+         (should (equal (openclaw--permission-mode) "Guarded")))
+       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "agent default"))
+                 ((symbol-function 'openclaw-sessions-refresh) #'ignore))
+         (openclaw-chat-set-permission)
+         (should (equal (openclaw-test--params "sessions.patch")
+                        '(:key "sp" :permissionMode :null)))
+         (openclaw-test--reply "sessions.patch" nil)
+         (should (equal (openclaw--permission-mode) "Full Access")))))
+    (openclaw-test--kill-chats)))
+
 (ert-deftest openclaw-test-message-navigation ()
   "C-<up>/C-<down> move between the messages you sent."
   (openclaw-test--with-gateway

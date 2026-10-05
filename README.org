@@ -56,6 +56,7 @@ chat with your agents in Emacs.
 | =C-c C-c=            | Stop the running turn                       |
 | =C-c C-a=            | Attach a file (=C-u=: remove one)           |
 | =C-c C-v=            | Switch the session's model                  |
+| =C-c C-r=            | Set the session's permission mode           |
 | =C-c C-g=            | Reload the transcript                       |
 | =C-<up>=, =C-<down>= | Previous / next message you sent            |
 | =RET=, =TAB= on =▶=  | Expand or collapse thinking and tool output |

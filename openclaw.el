@@ -44,6 +44,7 @@
 ;;   C-j      newline in the input (works in terminals too)
 ;;   C-c C-c  abort the running turn
 ;;   C-c C-v  switch the session's model (or click it in the header)
+;;   C-c C-r  set the session's permission mode (or click it in the header)
 ;;   C-c C-g  reload the transcript
 ;;   C-<up>   go to the previous message you sent
 ;;   C-<down> go to the next one (after the last: back to the input)
@@ -806,6 +807,7 @@ stored messages when the run ends.")
   "S-<return>" #'newline
   "C-c C-c" #'openclaw-chat-abort
   "C-c C-v" #'openclaw-chat-set-model
+  "C-c C-r" #'openclaw-chat-set-permission
   ;; markdown-mode remaps C-a to its own command, which ignores fields
   ;; and would move into the prompt; override that remap.
   "<remap> <move-beginning-of-line>" #'openclaw-chat-beginning-of-line
@@ -903,6 +905,58 @@ else the context window."
                      (not (plist-get s :totalTokensFresh)))
                 "~" "")
             (min 100 (round (* 100.0 (/ (float used) limit)))))))
+
+(defconst openclaw--permission-labels
+  '(("read-only" . "Read Only") ("guarded" . "Guarded")
+    ("workspace" . "Workspace") ("full" . "Full Access"))
+  "Web UI names of the permission modes.")
+
+(defun openclaw--permission-mode ()
+  "Name of this chat's permission mode, or nil if unknown.
+The session's own mode, else its agent's default, as in the web UI."
+  (let* ((s (openclaw--chat-session))
+         (id (or (plist-get s :agentId) (plist-get openclaw--agents :defaultId)))
+         (agent (seq-find (lambda (a) (equal (plist-get a :id) id))
+                          (plist-get openclaw--agents :agents)))
+         (mode (or (plist-get s :permissionMode)
+                   (plist-get agent :defaultPermissionMode))))
+    (when mode
+      (or (cdr (assoc mode openclaw--permission-labels)) mode))))
+
+(defvar openclaw--header-permission-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1] #'openclaw-chat-set-permission)
+    map)
+  "Keymap for the permission mode in the chat header line.")
+
+(defun openclaw-chat-set-permission ()
+  "Set this session's permission mode; choose \"agent default\" to clear it.
+Full Access needs the operator.admin scope (see `openclaw-scopes')."
+  (interactive)
+  (let* ((buf (current-buffer))
+         (key openclaw--session-key)
+         (default "agent default")
+         (completion-extra-properties
+          `(:annotation-function
+            ,(lambda (c) (when-let* ((mode (car (rassoc c openclaw--permission-labels))))
+                           (concat "  " (propertize mode 'face 'shadow))))))
+         (choice (completing-read
+                  (format "Permission mode (now %s): " (or (openclaw--permission-mode) "default"))
+                  (cons default (mapcar #'cdr openclaw--permission-labels)) nil t))
+         (mode (car (rassoc choice openclaw--permission-labels))))
+    (openclaw-request
+     "sessions.patch" `(:key ,key :permissionMode ,(or mode :null))
+     (lambda (ok res)
+       (if (not ok)
+           (message "OpenClaw: permission change failed: %s" (plist-get res :message))
+         ;; Show it now; the refresh confirms it.
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (when-let* ((s (openclaw--chat-session)))
+               (plist-put s :permissionMode mode))
+             (force-mode-line-update)))
+         (openclaw-sessions-refresh)
+         (message "OpenClaw: permission mode set to %s" choice))))))
 
 (defvar openclaw--header-model-map
   (let ((map (make-sparse-keymap)))
@@ -1004,6 +1058,10 @@ the line number (the `mode-line' foreground)."
                         'mouse-face 'mode-line-highlight
                         'help-echo "mouse-1: switch model"
                         'local-map openclaw--header-model-map))
+          (when-let* ((mode (openclaw--permission-mode)))
+            (concat "  " (propertize mode 'mouse-face 'mode-line-highlight
+                                     'help-echo "mouse-1: set permission mode"
+                                     'local-map openclaw--header-permission-map)))
           (when-let* ((usage (openclaw--context-usage)))
             (let ((fg (face-foreground 'mode-line nil t)))
               (concat "  " (propertize usage 'face
