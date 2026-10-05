@@ -1164,8 +1164,9 @@ chats not on screen stay unread."
 (ert-deftest openclaw-test-watchdog ()
   "A silent or stuck connection is dropped."
   (let ((dropped 0)
+        (openclaw--watchdog-last nil)
         (openclaw--hello '(:policy (:tickIntervalMs 1000))))
-    (cl-letf (((symbol-function 'openclaw--drop-connection) (lambda () (cl-incf dropped))))
+    (cl-letf (((symbol-function 'openclaw--drop-connection) (lambda (&rest _) (cl-incf dropped))))
       (let ((openclaw--ws nil) (openclaw--last-frame 0))
         (openclaw--watchdog)            ; nothing open
         (should (= dropped 0)))
@@ -1180,6 +1181,23 @@ chats not on screen stay unread."
       (let ((openclaw--ws 'fake) (openclaw--last-frame (- (float-time) 3)))
         (openclaw--watchdog)            ; silent for over two ticks
         (should (= dropped 1))))))
+
+(ert-deftest openclaw-test-watchdog-after-sleep ()
+  "A live connection is redone when the watchdog ran late, as after sleep."
+  (let ((reason nil)
+        (openclaw--ws 'fake)
+        (openclaw--last-frame (float-time))
+        (openclaw--watchdog-last nil))
+    (cl-letf (((symbol-function 'openclaw--drop-connection)
+               (lambda (&optional r) (setq reason (or r "silent")))))
+      (openclaw--watchdog)              ; first run: nothing to compare
+      (should-not reason)
+      (setq openclaw--watchdog-last (- (float-time) 5))
+      (openclaw--watchdog)              ; on time
+      (should-not reason)
+      (setq openclaw--watchdog-last (- (float-time) 600))
+      (openclaw--watchdog)              ; ten minutes late
+      (should (equal reason "resuming after sleep")))))
 
 (ert-deftest openclaw-test-connect-without-token ()
   "Connecting needs a token or a paired device's token."

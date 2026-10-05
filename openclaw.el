@@ -136,6 +136,8 @@
 (defvar openclaw--last-frame 0
   "Time the last frame arrived from the gateway.")
 (defvar openclaw--watchdog-timer nil)
+(defvar openclaw--watchdog-last nil
+  "When the watchdog last ran.")
 
 (defconst openclaw--client-id "cli")
 (defconst openclaw--client-mode "cli")
@@ -324,7 +326,8 @@ is ignored."
   "Open the WebSocket to `openclaw-url'."
   (setq openclaw--last-frame (float-time))
   (unless openclaw--watchdog-timer
-    (setq openclaw--watchdog-timer (run-with-timer 5 5 #'openclaw--watchdog)))
+    (setq openclaw--watchdog-last nil
+          openclaw--watchdog-timer (run-with-timer 5 5 #'openclaw--watchdog)))
   (setq openclaw--ws
         (websocket-open openclaw-url
                         :on-message #'openclaw--on-message
@@ -351,23 +354,31 @@ So that, e.g., a send lost with the connection reports it failed."
       (with-demoted-errors "OpenClaw: %S"
         (funcall cb nil '(:message "connection lost"))))))
 
-(defun openclaw--drop-connection ()
-  "Close a connection that stopped responding; it reconnects on close."
+(defun openclaw--drop-connection (&optional reason)
+  "Close a connection that stopped responding; it reconnects on close.
+REASON is shown, by default \"gateway not responding\"."
   (when openclaw--ws
-    (message "OpenClaw: gateway not responding")
+    (message "OpenClaw: %s" (or reason "gateway not responding"))
     (websocket-close openclaw--ws)))
 
 (defun openclaw--watchdog ()
   "Reconnect when the gateway has been silent for two tick intervals.
 A connection can die without Emacs noticing (sleep, network change);
 the gateway sends a tick every `tickIntervalMs', so silence means it
-is gone.  Also catches a handshake that never completes."
-  (when (and openclaw--ws
-             (> (- (float-time) openclaw--last-frame)
+is gone.  Also catches a handshake that never completes.
+After a sleep (the watchdog ran late), reconnect at once: a connection
+that survived it may have missed events, and reconnecting reloads the
+open chats."
+  (let* ((now (float-time))
+         (slept (and openclaw--watchdog-last (> (- now openclaw--watchdog-last) 15))))
+    (setq openclaw--watchdog-last now)
+    (when openclaw--ws
+      (cond (slept (openclaw--drop-connection "resuming after sleep"))
+            ((> (- now openclaw--last-frame)
                 (* 2 (/ (or (plist-get (plist-get openclaw--hello :policy) :tickIntervalMs)
                             30000)
-                        1000.0))))
-    (openclaw--drop-connection)))
+                        1000.0)))
+             (openclaw--drop-connection))))))
 
 (defun openclaw--schedule-reconnect ()
   "Reconnect after `openclaw--reconnect-delay' and double it."
