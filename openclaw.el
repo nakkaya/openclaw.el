@@ -1081,13 +1081,15 @@ E.g. inline ``` moved to the start of a line opens a code fence."
 (defun openclaw--fence-step (open)
   "Return the fence open after the line at point, given OPEN before it.
 Nil outside code.  As in GFM, only a fence of the same character and
-at least the same length closes OPEN."
+at least the same length, with nothing after it, closes OPEN; e.g.
+\"```clojure\" inside a ``` block is code."
   (if (not (looking-at openclaw--fence-regexp))
       open
     (let ((fence (match-string 1)))
       (cond ((not open) fence)
             ((and (eq (aref fence 0) (aref open 0))
-                  (>= (length fence) (length open)))
+                  (>= (length fence) (length open))
+                  (looking-at (concat openclaw--fence-regexp "[ \t]*$")))
              nil)
             (t open)))))
 

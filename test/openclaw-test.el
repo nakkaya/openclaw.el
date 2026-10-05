@@ -361,6 +361,13 @@ so it isn't left wider than the text (and centered off it)."
     (should (equal (openclaw--close-fences "```\n~~~~\nx\n```") "```\n~~~~\nx\n```"))
     (should (equal (openclaw--close-fences "~~~~\n```\nx\n~~~~") "~~~~\n```\nx\n~~~~"))
     ;; Unclosed fences are closed with their own kind.
+    ;; A fence with an info string can't close a block: it's code.
+    (should (equal (openclaw--close-fences "```\n```clojure\nx\n```") "```\n```clojure\nx\n```"))
+    (should (equal (openclaw--close-fences "```\n```clojure") "```\n```clojure\n```"))
+    (with-temp-buffer
+      (insert "```\na\n```clojure\n(defn f [])\n```\n")
+      (openclaw--fill-markdown (point-min) (point-max))
+      (should (equal (buffer-string) "```\na\n```clojure\n(defn f [])\n```\n")))
     (should (equal (openclaw--close-fences "~~~~\nx") "~~~~\nx\n~~~~"))
     (should (equal (openclaw--close-fences "a\n```py\nx") "a\n```py\nx\n```"))))
 
