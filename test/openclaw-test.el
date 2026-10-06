@@ -161,6 +161,8 @@
   (should (equal (openclaw--tool-summary "exec" '(:command "ls -la")) "⚙ Terminal"))
   (should (equal (openclaw--tool-summary "web_search" '(:query "q")) "⚙ Search"))
   (should (equal (openclaw--tool-summary "tool_call" '(:id "mcp:x" :args (:a 1))) "⚙ Tool Call"))
+  (should (equal (openclaw--tool-summary "tool_search" '(:query "q")) "⚙ Tool Search"))
+  (should (equal (openclaw--tool-summary "tool_describe" '(:id "x")) "⚙ Tool Describe"))
   (should (equal (openclaw--tool-summary "web_fetch" '(:url "u")) "⚙ web_fetch u")))
 
 (ert-deftest openclaw-test-reload-keeps-position ()

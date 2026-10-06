@@ -1314,7 +1314,9 @@ Message text is trimmed, so it never brings a blank line of its own."
         (t (format "%S" args))))
 
 (defconst openclaw--tool-labels '(("exec" . "Terminal") ("web_search" . "Search")
-                                  ("tool_call" . "Tool Call"))
+                                  ("tool_call" . "Tool Call")
+                                  ("tool_search" . "Tool Search")
+                                  ("tool_describe" . "Tool Describe"))
   "Header labels for tools whose arguments are shown only when expanded.
 Their arguments (whole scripts, long queries) make poor one-liners.")
 
