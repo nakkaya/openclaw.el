@@ -414,6 +414,13 @@ so it isn't left wider than the text (and centered off it)."
           (should (= (openclaw--visible-width cell) (markdown--string-width cell))))
         (should (= (openclaw--visible-width (car cells)) (if hide 4 8)))))))
 
+(ert-deftest openclaw-test-visible-width-emoji ()
+  "A narrow character made an emoji by U+FE0F counts as two columns."
+  (should (= (openclaw--visible-width "☁️ dry") 6))   ; U+2601 U+FE0F
+  (should (= (openclaw--visible-width "⛅ dry") 6))    ; wide on its own
+  (should (= (openclaw--visible-width "⛅️ dry") 6))   ; wide, with U+FE0F
+  (should (= (openclaw--visible-width "plain") 5)))
+
 (ert-deftest openclaw-test-visible-width-links ()
   "With markup hidden, link URLs don't count, even split from their text."
   (let ((buffer-invisibility-spec '(markdown-markup t)))

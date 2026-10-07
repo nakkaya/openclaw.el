@@ -1727,18 +1727,23 @@ Pipes inside `code' do not split cells."
 (defun openclaw--visible-width (s)
   "Display width of S, minus markup hidden by `markdown-hide-markup'.
 Fontified text (tables) has the hidden markup marked; elsewhere links
-are recognized by pattern, including the tail of one split by filling."
-  (string-width
-   (if (invisible-p 'markdown-markup)
-       (let ((url "\\](\\(?:[^()\n]\\|([^)\n]*)\\)*)"))
-         (thread-last
-           (concat (cl-loop for c across s
-                            for i from 0
-                            unless (eq (get-text-property i 'invisible s) 'markdown-markup)
-                            collect c))
-           (replace-regexp-in-string (concat "\\[\\([^]\n]*\\)" url) "\\1")
-           (replace-regexp-in-string url "")))
-     s)))
+are recognized by pattern, including the tail of one split by filling.
+A narrow character followed by U+FE0F (e.g. ☁️) is drawn as a wide
+emoji, though `string-width' counts it as one column."
+  (let ((text (if (invisible-p 'markdown-markup)
+                  (let ((url "\\](\\(?:[^()\n]\\|([^)\n]*)\\)*)"))
+                    (thread-last
+                      (concat (cl-loop for c across s
+                                       for i from 0
+                                       unless (eq (get-text-property i 'invisible s) 'markdown-markup)
+                                       collect c))
+                      (replace-regexp-in-string (concat "\\[\\([^]\n]*\\)" url) "\\1")
+                      (replace-regexp-in-string url "")))
+                s)))
+    (+ (string-width text)
+       (cl-loop for i from 1 below (length text)
+                count (and (eq (aref text i) #xFE0F)
+                           (= (char-width (aref text (1- i))) 1))))))
 
 (defun openclaw--align-table (beg end)
   "Align the table BEG..END by visible width.
