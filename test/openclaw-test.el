@@ -415,11 +415,35 @@ so it isn't left wider than the text (and centered off it)."
         (should (= (openclaw--visible-width (car cells)) (if hide 4 8)))))))
 
 (ert-deftest openclaw-test-visible-width-emoji ()
-  "A narrow character made an emoji by U+FE0F counts as two columns."
-  (should (= (openclaw--visible-width "☁️ dry") 6))   ; U+2601 U+FE0F
-  (should (= (openclaw--visible-width "⛅ dry") 6))    ; wide on its own
-  (should (= (openclaw--visible-width "⛅️ dry") 6))   ; wide, with U+FE0F
-  (should (= (openclaw--visible-width "plain") 5)))
+  "A narrow character made an emoji by U+FE0F is two columns in a GUI and
+one in a terminal, as each draws it."
+  (cl-letf (((symbol-function 'display-graphic-p) #'always))
+    (should (= (openclaw--visible-width "☁️ dry") 6))   ; U+2601 U+FE0F
+    (should (= (openclaw--visible-width "⛅ dry") 6))    ; wide on its own
+    (should (= (openclaw--visible-width "⛅️ dry") 6))   ; wide, with U+FE0F
+    (should (= (openclaw--visible-width "plain") 5)))
+  (cl-letf (((symbol-function 'display-graphic-p) #'ignore))
+    (should (= (openclaw--visible-width "☁️ dry") 5))
+    (should (= (openclaw--visible-width "⛅ dry") 6))))
+
+(ert-deftest openclaw-test-align-indented-table ()
+  "A table indented as code (e.g. in a list item) is measured as the table
+it becomes once aligned flush left, with its markup hidden."
+  (with-temp-buffer
+    (gfm-mode)
+    (markdown-toggle-markup-hiding 1)
+    (insert "     | At point | Diff |\n     |---|---|\n     | unstaged | `git diff` |\n     | a range | that range |\n")
+    (openclaw--align-tables)
+    (font-lock-ensure)
+    (goto-char (point-min))
+    (let (ends)
+      (while (not (eobp))
+        (end-of-line)
+        (push (cl-loop for p from (line-beginning-position) below (point)
+                       count (not (invisible-p p)))
+              ends)
+        (forward-line 1))
+      (should (= 1 (length (delete-dups ends)))))))
 
 (ert-deftest openclaw-test-visible-width-links ()
   "With markup hidden, link URLs don't count, even split from their text."

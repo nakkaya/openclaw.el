@@ -1728,8 +1728,9 @@ Pipes inside `code' do not split cells."
   "Display width of S, minus markup hidden by `markdown-hide-markup'.
 Fontified text (tables) has the hidden markup marked; elsewhere links
 are recognized by pattern, including the tail of one split by filling.
-A narrow character followed by U+FE0F (e.g. ☁️) is drawn as a wide
-emoji, though `string-width' counts it as one column."
+In a GUI, a narrow character followed by U+FE0F (e.g. ☁️) is drawn as a
+wide emoji, though `string-width' counts it as one column; terminals
+draw it in one column, as Emacs assumes there."
   (let ((text (if (invisible-p 'markdown-markup)
                   (let ((url "\\](\\(?:[^()\n]\\|([^)\n]*)\\)*)"))
                     (thread-last
@@ -1741,9 +1742,11 @@ emoji, though `string-width' counts it as one column."
                       (replace-regexp-in-string url "")))
                 s)))
     (+ (string-width text)
-       (cl-loop for i from 1 below (length text)
-                count (and (eq (aref text i) #xFE0F)
-                           (= (char-width (aref text (1- i))) 1))))))
+       (if (display-graphic-p)
+           (cl-loop for i from 1 below (length text)
+                    count (and (eq (aref text i) #xFE0F)
+                               (= (char-width (aref text (1- i))) 1)))
+         0))))
 
 (defun openclaw--align-table (beg end)
   "Align the table BEG..END by visible width.
@@ -1792,6 +1795,14 @@ widths (slow: markdown-mode's emphasis matching is costly)."
             ;; Insertion type t: the table is reinserted at BEG, and
             ;; the marker must end up after it, not at BEG.
             (table-end (copy-marker (markdown-table-end) t)))
+        ;; Aligning puts the table flush left, so measure it that way:
+        ;; indented 4+ columns (e.g. in a list item) markdown-mode would
+        ;; fontify it as code, with no markup hidden.
+        (save-excursion
+          (goto-char beg)
+          (while (< (point) table-end)
+            (when (looking-at "[ \t]+") (replace-match ""))
+            (forward-line 1)))
         (when (invisible-p 'markdown-markup)
           (font-lock-ensure beg table-end))
         (ignore-errors (openclaw--align-table beg table-end))
