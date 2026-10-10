@@ -41,17 +41,19 @@ centered in the window.
 
 ** Sessions buffer
 
-| Key   | Action                                        |
-|-------+-----------------------------------------------|
-| =RET= | Open the session at point                     |
-| =TAB= | Expand or collapse a group                    |
-| =c=   | Create a session                              |
-| =r=   | Rename the session                            |
-| =m=   | Move the session to a group (new or existing) |
-| =a=   | Archive the session                           |
-| =k=   | Delete the session                            |
-| =g=   | Refresh                                       |
-| =?=   | Show these keys                               |
+| Key       | Action                                        |
+|-----------+-----------------------------------------------|
+| =RET=     | Open the session at point                     |
+| =TAB=     | Expand or collapse a group                    |
+| =c=       | Create a session                              |
+| =r=       | Rename the session                            |
+| =m=       | Move the session to a group (new or existing) |
+| =a=       | Archive the session                           |
+| =k=       | Delete the session                            |
+| =g=       | Refresh                                       |
+| =?=       | Show these keys                               |
+| =C-c C-b= | Switch to another open chat                   |
+| =C-c C-j= | Open any session, newest first                |
 
 ** Chat buffer
 
@@ -61,6 +63,8 @@ centered in the window.
 | =S-RET=, =C-j=       | New line in the message                     |
 | =C-c C-c=            | Stop the running turn                       |
 | =C-c C-a=            | Attach a file (=C-u=: remove one)           |
+| =C-c C-b=            | Switch to another open chat                 |
+| =C-c C-j=            | Open any session, newest first              |
 | =C-c C-v=            | Switch the session's model                  |
 | =C-c C-r=            | Set the session's permission mode           |
 | =C-c C-g=            | Reload the transcript                       |

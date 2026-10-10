@@ -39,6 +39,7 @@
 ;;   k        delete the session at point (needs operator.admin)
 ;;   g        refresh
 ;;   ?        list these keys
+;;   C-c C-b, C-c C-j  as in a chat (also in the home view)
 ;;
 ;; Chat buffer (*openclaw: NAME*):
 ;;
@@ -52,6 +53,8 @@
 ;;   C-<up>   go to the previous message you sent
 ;;   C-<down> go to the next one (after the last: back to the input)
 ;;   C-c C-a  attach a file to the message being written (C-u: remove)
+;;   C-c C-b  switch to another open chat
+;;   C-c C-j  open any session, newest first
 ;;   RET/TAB  on a ▶ header: expand/collapse thinking or tool output
 ;;   mouse-1  on a ▶ header: same
 ;;
@@ -487,7 +490,9 @@ open chats."
   "a" #'openclaw-sessions-archive
   "k" #'openclaw-sessions-delete
   "g" #'openclaw-sessions-refresh
-  "?" #'openclaw-sessions-help)
+  "?" #'openclaw-sessions-help
+  "C-c C-b" #'openclaw-switch-to-chat
+  "C-c C-j" #'openclaw-open-session)
 
 (define-derived-mode openclaw-sessions-mode magit-section-mode "OpenClaw-Sessions"
   "Tree of OpenClaw sessions."
@@ -699,7 +704,9 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
   "<mouse-1>" #'ignore
   "<drag-mouse-1>" #'ignore
   "n" #'next-line
-  "p" #'previous-line)
+  "p" #'previous-line
+  "C-c C-b" #'openclaw-switch-to-chat
+  "C-c C-j" #'openclaw-open-session)
 
 (define-derived-mode openclaw-home-mode special-mode "OpenClaw"
   "Agent banner and recent sessions."
@@ -878,7 +885,7 @@ An empty GROUP takes the session out of its group."
 (defun openclaw-sessions-help ()
   "Show the sidebar's keys in the echo area."
   (interactive)
-  (message "RET open  c create  r rename  m move  a archive  k delete  g refresh  TAB fold"))
+  (message "RET open  c create  r rename  m move  a archive  k delete  g refresh  TAB fold  C-c C-b/C-c C-j switch"))
 
 (defun openclaw-sessions-archive ()
   "Archive the session at point (hides it; restorable from the web UI)."
@@ -996,7 +1003,10 @@ stored messages when the run ends.")
   "C-c C-g" #'openclaw-chat-reload
   "C-<up>" #'openclaw-chat-previous-message
   "C-<down>" #'openclaw-chat-next-message
-  "C-c C-a" #'openclaw-chat-attach)
+  "C-c C-a" #'openclaw-chat-attach
+  ;; Same keys as ERC.
+  "C-c C-b" #'openclaw-switch-to-chat
+  "C-c C-j" #'openclaw-open-session)
 
 (define-derived-mode openclaw-chat-mode gfm-mode "OpenClaw"
   "Chat with an OpenClaw session.
@@ -2121,6 +2131,60 @@ run the new messages are fetched when it ends."
     ;; `switch-to-buffer' restores the window's old point, which may
     ;; be inside the read-only transcript.
     (openclaw--goto-end)))
+
+(add-to-list 'completion-category-defaults '(openclaw-session (styles flex)))
+
+(defun openclaw--read-session (prompt sessions &optional default)
+  "Read one of SESSIONS (plists, in display order) with PROMPT; return its key.
+With DEFAULT, the first one is the default.  Matching is fuzzy (the
+`flex' style, set for the `openclaw-session' completion category) and
+ignores case.  A name used by several gets its group added."
+  (let* ((names (mapcar #'openclaw--session-name sessions))
+         (choices (cl-mapcar (lambda (s name)
+                               (cons (if (> (cl-count name names :test #'equal) 1)
+                                         (format "%s (%s)" name
+                                                 (or (plist-get s :category) "Sessions"))
+                                       name)
+                                     (plist-get s :key)))
+                             sessions names))
+         (completion-ignore-case t))
+    (cdr (assoc (completing-read
+                 (format-prompt prompt (and default (caar choices)))
+                 (lambda (string pred action)
+                   (if (eq action 'metadata)
+                       '(metadata (category . openclaw-session)
+                                  (display-sort-function . identity))
+                     (complete-with-action action choices string pred)))
+                 nil t nil nil (and default (caar choices)))
+                choices))))
+
+(defun openclaw-switch-to-chat ()
+  "Switch to another open chat, last used first, like ERC's `erc-switch-to-buffer'."
+  (interactive)
+  (let ((keys (cl-loop for b in (buffer-list)
+                       for key = (buffer-local-value 'openclaw--session-key b)
+                       when (and key (not (eq b (current-buffer))))
+                       collect key)))
+    (unless keys (user-error "No other open chat"))
+    (openclaw-chat
+     (openclaw--read-session
+      "Switch to chat"
+      (mapcar (lambda (key)
+                (or (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions)
+                    (list :key key)))
+              keys)
+      t))))
+
+(defun openclaw-open-session ()
+  "Open any session, newest first, like ERC's `erc-join-channel'."
+  (interactive)
+  (let ((sessions (sort (seq-remove (lambda (s) (or (plist-get s :archived)
+                                                    (plist-get s :isBackground)))
+                                    openclaw--sessions)
+                        (lambda (a b) (> (or (plist-get a :updatedAt) 0)
+                                         (or (plist-get b :updatedAt) 0))))))
+    (unless sessions (user-error "No sessions; is OpenClaw connected?"))
+    (openclaw-chat (openclaw--read-session "Open session" sessions))))
 
 ;;;;; Attachments: files staged with C-c C-a go with the next message.
 ;; The agent sees their content in that turn only; the gateway keeps

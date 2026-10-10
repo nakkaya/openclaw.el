@@ -1057,6 +1057,65 @@ expanded, it has the body's, as it then starts the body's first line."
       (setq openclaw--sessions (list (list :key "k1" :displayName "Renamed")))
       (should (equal (eval (cadr mode-line-format)) " Renamed")))))
 
+(ert-deftest openclaw-test-switch-to-chat ()
+  "C-c C-b offers the other open chats by name, the last used as default."
+  (openclaw-test--with-gateway
+   (let ((a (openclaw-test--open-chat "sa"))
+         (b (openclaw-test--open-chat "sb"))
+         offered default opened)
+     (setq openclaw--sessions (list (list :key "sa" :displayName "Alpha")
+                                    (list :key "sb" :displayName "Beta")))
+     (with-current-buffer a
+       (cl-letf (((symbol-function 'completing-read)
+                  (lambda (_prompt table _pred _req _init _hist def)
+                    (setq offered (all-completions "" table) default def)
+                    "Beta"))
+                 ((symbol-function 'openclaw-chat) (lambda (key) (setq opened key))))
+         (openclaw-switch-to-chat)))
+     (should (equal offered '("Beta")))
+     (should (equal default "Beta"))
+     (should (equal opened "sb"))
+     ;; Alone: nothing to switch to.
+     (let ((kill-buffer-hook nil)) (kill-buffer b))
+     (with-current-buffer a
+       (should-error (openclaw-switch-to-chat) :type 'user-error))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-open-session ()
+  "C-c C-j offers all sessions newest first; repeated names get their group."
+  (let ((openclaw--sessions
+         (list (list :key "old" :displayName "Review" :category "Bilo" :updatedAt 1)
+               (list :key "new" :displayName "Review" :category "Work" :updatedAt 3)
+               (list :key "mid" :displayName "Notes" :updatedAt 2)
+               (list :key "gone" :displayName "Gone" :archived t :updatedAt 4)))
+        offered metadata default opened)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt table _pred _req _init _hist def)
+                 (setq offered (all-completions "" table)
+                       metadata (cdr (funcall table "" nil 'metadata))
+                       default def)
+                 "Review (Bilo)"))
+              ((symbol-function 'openclaw-chat) (lambda (key) (setq opened key))))
+      (openclaw-open-session))
+    (should (equal offered '("Review (Work)" "Notes" "Review (Bilo)")))
+    (should (eq (cdr (assq 'display-sort-function metadata)) 'identity))
+    (should (eq (cdr (assq 'category metadata)) 'openclaw-session))
+    (should-not default)
+    (should (equal opened "old"))
+    (let ((openclaw--sessions nil))
+      (should-error (openclaw-open-session) :type 'user-error))))
+
+(ert-deftest openclaw-test-session-fuzzy-match ()
+  "Session prompts match fuzzily and ignore case: \"rvw\" finds Review."
+  (let* ((completion-ignore-case t)
+         (table (lambda (string pred action)
+                  (if (eq action 'metadata)
+                      '(metadata (category . openclaw-session))
+                    (complete-with-action action '("Review" "Release" "Notes") string pred))))
+         (matches (completion-all-completions "rvw" table nil 3)))
+    (when (consp matches) (setcdr (last matches) nil))
+    (should (equal matches '("Review")))))
+
 (ert-deftest openclaw-test-sidebar-empty ()
   "Commands on an empty sidebar give a user error."
   (with-current-buffer (get-buffer-create "*openclaw-sessions*")
