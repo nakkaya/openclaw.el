@@ -479,6 +479,38 @@ it becomes once aligned flush left, with its markup hidden."
      (should (string-match-p "openclaw\n\nHello\n" (buffer-string)))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-stream-keeps-reading-place ()
+  "Reading back inside the reply being streamed, the window doesn't jump
+as the reply is refilled, nor when the stored messages replace it."
+  (openclaw-test--with-gateway
+   (save-window-excursion
+     (delete-other-windows)
+     (switch-to-buffer (openclaw-test--open-chat "rp"))
+     (setq openclaw--history-cursor "c1")
+     (let ((reply (mapconcat (lambda (i) (format "Paragraph %d of the streaming reply, long enough to wrap when filled to eighty columns." i))
+                             (number-sequence 1 30) "\n\n"))
+           (top (lambda () (save-excursion (goto-char (window-start))
+                                           (buffer-substring-no-properties (point) (line-end-position))))))
+       (openclaw--chat-on-event "agent" '(:sessionKey "rp" :stream "lifecycle" :data (:phase "start")))
+       (openclaw--chat-on-event "agent" (list :sessionKey "rp" :stream "assistant" :data (list :delta reply)))
+       (goto-char (point-min))
+       (search-forward "Paragraph 5 ")
+       (set-window-start nil (line-beginning-position) t)
+       (let ((line (funcall top)))
+         (should (string-prefix-p "Paragraph 5 " line))
+         (dotimes (i 5)
+           (openclaw--chat-on-event "agent" (list :sessionKey "rp" :stream "assistant"
+                                                  :data (list :delta (format " more %d" i)))))
+         (should (equal (funcall top) line))
+         (should (string-prefix-p "Paragraph 5 " (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+         ;; The run ends: the draft is replaced by the stored reply.
+         (openclaw--chat-on-event "agent" '(:sessionKey "rp" :stream "lifecycle" :data (:phase "end")))
+         (openclaw-test--reply "chat.history"
+                               (list :kind "delta" :deltaCursor "c2"
+                                     :messages (list (list :message (list :role "assistant" :content (list (list :type "text" :text reply)))))))
+         (should (equal (funcall top) line))))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-stream-after-reload ()
   "Thinking keeps streaming after a reload (e.g. on reconnect) mid-block."
   (openclaw-test--with-gateway
@@ -725,7 +757,7 @@ it into the input still works, and the result can be edited."
      (let ((timer-fn nil) (dropped 0))
        (insert "important question")
        (cl-letf (((symbol-function 'run-with-timer)
-                  ;; Catch the send timeout, not e.g. the busy blink.
+                  ;; Catch the send timeout, not other timers.
                   (lambda (secs _repeat fn &rest _) (when (eql secs 15) (setq timer-fn fn)) 'timer))
                  ((symbol-function 'openclaw--drop-connection) (lambda () (cl-incf dropped))))
          (openclaw-chat-send)
@@ -1059,18 +1091,18 @@ expanded, it has the body's, as it then starts the body's first line."
        (setq openclaw--sessions (list (list :key "ml" :displayName "100% done" :model "m"
                                             :modelProvider "p" :permissionMode "guarded")))
        (let* ((line (openclaw--mode-line))
-              (right "p/m  Guarded ● ")
+              (right "p/m  Guarded ")
               (gap (string-search " p/m" line)))
-         (should (string-prefix-p " 100%% done" line))   ; % escaped for the mode line
-         ;; Idle, the dot is hidden (or a space without mode-line colours).
-         (should (string-match-p "p/m  Guarded [● ] \\'" line))
+         (should (string-prefix-p " ○ 100%% done" line))   ; % escaped for the mode line
+         (should (string-suffix-p "p/m  Guarded " line))
          ;; The gap before the right part aligns it to the right edge.
          (should (equal (get-text-property gap 'display line)
                         `(space :align-to (- right ,(length right))))))
-       ;; Busy: the dot shows; the model and mode keep their click maps.
-       (let ((openclaw--busy t) (openclaw--blink-on t))
+       ;; Busy: a green ●; the model and mode keep their click maps.
+       (let ((openclaw--busy t))
          (let ((line (openclaw--mode-line)))
-           (should (eq (get-text-property (string-search "●" line) 'face line) 'success))
+           (should (string-prefix-p " ● " line))
+           (should (eq (get-text-property 1 'face line) 'success))
            (should (eq (get-text-property (string-search "p/m" line) 'local-map line)
                        openclaw--mode-line-model-map))
            (should (eq (get-text-property (string-search "Guarded" line) 'local-map line)
@@ -1080,7 +1112,7 @@ expanded, it has the body's, as it then starts the body's first line."
                                             :model "m" :modelProvider "p")))
        (let ((line (openclaw--mode-line)))
          (should (string-search "…" line))
-         (should (string-match-p "p/m [● ] \\'" line))
+         (should (string-suffix-p "p/m " line))
          (should (<= (string-width line) (window-total-width)))))))
   (openclaw-test--kill-chats))
 

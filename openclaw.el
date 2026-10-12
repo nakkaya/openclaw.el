@@ -58,9 +58,9 @@
 ;;   RET/TAB  on a ▶ header: expand/collapse thinking or tool output
 ;;   mouse-1  on a ▶ header: same
 ;;
-;; Chat mode line: the session's name, and at the right its model
-;; (click to switch), context use in percent, permission mode (click
-;; to set) and a ● that blinks while the agent is working.
+;; Chat mode line: a green ● while the agent is working (○ when idle)
+;; and the session's name, and at the right its model (click to
+;; switch), context use in percent and permission mode (click to set).
 ;;
 ;; Messages are centered in the window.  Tables and code wider than
 ;; the text are centered on their own width, or stay flush left when
@@ -1204,17 +1204,13 @@ Full Access needs the operator.admin scope (see `openclaw-scopes')."
                 (openclaw-sessions-refresh)
                 (message "OpenClaw: model set to %s" choice))))))))))
 
-;;;;; Busy indicator: a dot before the model that blinks during a run.
+;;;;; Busy indicator: a green ● before the session name during a run, ○ when idle.
 
 (defvar-local openclaw--busy nil "Non-nil while a run is in progress.")
-(defvar openclaw--blink-on nil "Blink phase shared by all chat buffers.")
-(defvar openclaw--blink-timer nil)
 
 (defun openclaw--set-busy (busy)
-  "Mark this chat BUSY or idle; start the blink timer if needed."
+  "Mark this chat BUSY or idle."
   (setq openclaw--busy busy)
-  (when (and busy (not openclaw--blink-timer))
-    (setq openclaw--blink-timer (run-with-timer 0 0.5 #'openclaw--blink)))
   (force-mode-line-update))
 
 (defun openclaw--sync-busy ()
@@ -1225,34 +1221,11 @@ Full Access needs the operator.admin scope (see `openclaw-scopes')."
         (openclaw--set-busy
          (equal (plist-get (openclaw--chat-session) :status) "running"))))))
 
-(defun openclaw--blink ()
-  "Toggle the blink phase and redraw busy chats' mode lines only.
-Stops itself once no chat is busy."
-  (setq openclaw--blink-on (not openclaw--blink-on))
-  (let (any)
-    (dolist (b (buffer-list))
-      (when (buffer-local-value 'openclaw--busy b)
-        (setq any t)
-        (with-current-buffer b (force-mode-line-update))))
-    (unless any
-      (cancel-timer openclaw--blink-timer)
-      (setq openclaw--blink-timer nil))))
-
-(defun openclaw--busy-dot ()
-  "Return a ● that blinks while busy.
-When idle it's drawn in the mode line's background colour, so it keeps
-its place and the rest doesn't shift."
-  (let ((bg (face-background (if (mode-line-window-selected-p) 'mode-line 'mode-line-inactive)
-                             nil t)))
-    (cond ((and openclaw--busy openclaw--blink-on) (propertize "●" 'face 'success))
-          (bg (propertize "●" 'face `(:foreground ,bg)))
-          (t " "))))
-
 (defun openclaw--mode-line ()
-  "Return the chat mode line: session name left, session state right.
-At the right edge: the model (click to switch), context use, permission
-mode (click to set) and a ● that blinks while the agent is working.  The
-name is shortened to keep the right side in view."
+  "Return the chat mode line: busy state and session name left, details right.
+A green ● while the agent is working, else ○.  At the right edge: the
+model (click to switch), context use and permission mode (click to
+set).  The name is shortened to keep the right side in view."
   (let* ((right (concat
                  (when-let* ((model (openclaw--session-model)))
                    (propertize model 'face 'mode-line-emphasis
@@ -1265,13 +1238,16 @@ name is shortened to keep the right side in view."
                    (concat "  " (propertize mode 'mouse-face 'mode-line-highlight
                                             'help-echo "mouse-1: set permission mode"
                                             'local-map openclaw--mode-line-permission-map)))
-                 " " (openclaw--busy-dot) " "))
+                 " "))
          ;; The usage's "%%" shows as one column.
          (width (string-width (string-replace "%%" "%" right)))
          (name (truncate-string-to-width (openclaw--chat-title)
-                                         (max 1 (- (window-total-width) width 2))
+                                         (max 1 (- (window-total-width) width 5))
                                          nil nil "…")))
-    (concat " " (string-replace "%" "%%" name)
+    (concat " " (if openclaw--busy
+                    (propertize "●" 'face 'success 'help-echo "Working")
+                  (propertize "○" 'face 'shadow 'help-echo "Idle"))
+            " " (string-replace "%" "%%" name)
             (propertize " " 'display `(space :align-to (- right ,width)))
             right)))
 
@@ -1836,6 +1812,21 @@ widths (slow: markdown-mode's emphasis matching is costly)."
     (move-to-column (cdr line-col))
     (point)))
 
+(defun openclaw--scrolled-views ()
+  "Windows scrolled back into this chat: (WINDOW START POINT) by line/column.
+Rewriting text (a reply refilled as it streams, a re-render) moves
+their start and point when those are in it; this keeps you reading."
+  (cl-loop for w in (get-buffer-window-list nil nil t)
+           unless (>= (window-point w) openclaw--input-marker)
+           collect (list w (openclaw--line-col (window-start w))
+                         (openclaw--line-col (window-point w)))))
+
+(defun openclaw--restore-views (views)
+  "Put the windows in VIEWS, from `openclaw--scrolled-views', back in place."
+  (pcase-dolist (`(,w ,start ,pt) views)
+    (set-window-start w (openclaw--line-col-pos start) t)
+    (set-window-point w (openclaw--line-col-pos pt))))
+
 (defun openclaw--chat-render (messages)
   "Replace the transcript with MESSAGES, keeping pending input.
 Windows scrolled back into the transcript keep their place."
@@ -1849,10 +1840,7 @@ Windows scrolled back into the transcript keep their place."
                     (if (>= m openclaw--input-marker)
                         (- m openclaw--input-marker)
                       (openclaw--line-col m))))
-         (views (cl-loop for w in (get-buffer-window-list nil nil t)
-                         unless (>= (window-point w) openclaw--input-marker)
-                         collect (list w (openclaw--line-col (window-start w))
-                                       (openclaw--line-col (window-point w))))))
+         (views (openclaw--scrolled-views)))
     (erase-buffer)
     (delete-all-overlays)
     (setq openclaw--turn-start nil)
@@ -1881,9 +1869,7 @@ Windows scrolled back into the transcript keep their place."
                   (if (integerp mark-at)
                       (min (point-max) (+ openclaw--input-marker mark-at))
                     (openclaw--line-col-pos mark-at))))
-    (pcase-dolist (`(,w ,start ,pt) views)
-      (set-window-start w (openclaw--line-col-pos start) t)
-      (set-window-point w (openclaw--line-col-pos pt)))))
+    (openclaw--restore-views views)))
 
 (defun openclaw-chat-reload ()
   "Reload the transcript from the gateway."
@@ -1932,7 +1918,8 @@ formatted; without a usable cursor, reload the whole transcript."
   "Replace the current turn's draft with MESSAGES, the stored version."
   (let ((inhibit-read-only t)
         (at-end (>= (point) openclaw--input-marker))
-        (beg (or openclaw--turn-start openclaw--live-marker)))
+        (beg (or openclaw--turn-start openclaw--live-marker))
+        (views (openclaw--scrolled-views)))
     (save-excursion
       (dolist (o (overlays-in beg openclaw--live-marker))
         (delete-overlay o))
@@ -1949,13 +1936,15 @@ formatted; without a usable cursor, reload the whole transcript."
           openclaw--live-stream nil
           openclaw--live-fold nil)
     (openclaw--update-gap)
+    (openclaw--restore-views views)
     (when at-end (openclaw--goto-end))))
 
 (defun openclaw--chat-live (stream fn)
   "Call FN at the end of the transcript to insert streamed output.
 FN gets non-nil when STREAM differs from the previous one (a new block)."
   (let ((inhibit-read-only t)
-        (at-end (>= (point) openclaw--input-marker)))
+        (at-end (>= (point) openclaw--input-marker))
+        (views (openclaw--scrolled-views)))
     (save-excursion
       (goto-char openclaw--live-marker)
       (let ((start (point))
@@ -1979,6 +1968,7 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
         (add-text-properties start (point) '(read-only t front-sticky t rear-nonsticky t))
         (openclaw--center start (point))))
     (openclaw--update-gap)
+    (openclaw--restore-views views)
     (when at-end (openclaw--goto-end))))
 
 (defun openclaw--update-gap ()
@@ -2125,7 +2115,7 @@ run the new messages are fetched when it ends."
         (openclaw-request "sessions.messages.subscribe" `(:key ,key))
         (openclaw-chat-reload)
         (openclaw--load-commands)
-        ;; Already mid-run (e.g. started elsewhere): blink from the start.
+        ;; Already mid-run (e.g. started elsewhere): show it busy now.
         (when (equal (plist-get session :status) "running")
           (openclaw--set-busy t))))
     ;; From the sidebar, open in the window used last before it, so
@@ -2334,7 +2324,7 @@ With prefix argument REMOVE, remove a staged attachment instead."
                                (when (and (eq ws openclaw--ws)
                                           (gethash id openclaw--pending))
                                  (openclaw--drop-connection)))))
-    ;; Blink right away, as the run's start event may take a moment.
+    ;; Show busy right away, as the run's start event may take a moment.
     ;; Only once sent: a refused send (not connected) leaves no busy
     ;; state.  The failure callback above always runs later.
     (openclaw--set-busy t)
