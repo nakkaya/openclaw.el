@@ -47,8 +47,8 @@
 ;;   S-RET    newline in the input (GUI frames)
 ;;   C-j      newline in the input (works in terminals too)
 ;;   C-c C-c  abort the running turn
-;;   C-c C-v  switch the session's model (or click it in the header)
-;;   C-c C-r  set the session's permission mode (or click it in the header)
+;;   C-c C-v  switch the session's model (or click it in the mode line)
+;;   C-c C-r  set the session's permission mode (or click it in the mode line)
 ;;   C-c C-g  reload the transcript
 ;;   C-<up>   go to the previous message you sent
 ;;   C-<down> go to the next one (after the last: back to the input)
@@ -58,8 +58,9 @@
 ;;   RET/TAB  on a ▶ header: expand/collapse thinking or tool output
 ;;   mouse-1  on a ▶ header: same
 ;;
-;; Chat header line: a ● that blinks while the agent is working, the
-;; session's model (click to switch) and context use in percent.
+;; Chat mode line: the session's name, and at the right its model
+;; (click to switch), context use in percent, permission mode (click
+;; to set) and a ● that blinks while the agent is working.
 ;;
 ;; Messages are centered in the window.  Tables and code wider than
 ;; the text are centered on their own width, or stay flush left when
@@ -586,7 +587,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                                               (openclaw--render-sidebar))
                                             (when (get-buffer "*openclaw*")
                                               (openclaw--render-home))
-                                            (force-mode-line-update t) ; chat header lines
+                                            (force-mode-line-update t) ; chat mode lines
                                             (when fit (openclaw--sidebar-fit))
                                             (when callback (funcall callback))))))))
 
@@ -1012,9 +1013,7 @@ stored messages when the run ends.")
   "Chat with an OpenClaw session.
 Prose is filled to `fill-column'; tables and code extend sideways."
   (setq-local truncate-lines t)
-  ;; The session name alone, following renames.
-  (setq-local mode-line-format
-              '(:eval (concat " " (string-replace "%" "%%" (openclaw--chat-title)))))
+  (setq-local mode-line-format '((:eval (openclaw--mode-line))))
   ;; markdown-mode lets font-lock strip `rear-nonsticky', which would
   ;; make the read-only prompt sticky and block typing after it.  It
   ;; comes from `font-lock-defaults', applied when font-lock starts.
@@ -1027,7 +1026,6 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (setq-local fill-column openclaw-fill-column)
   ;; Highlight code blocks with their language's major mode.
   (setq-local markdown-fontify-code-blocks-natively t)
-  (setq-local header-line-format '((:eval (openclaw--header-line))))
   (add-hook 'fill-nobreak-predicate #'openclaw--fill-nobreak-p nil t)
   (add-hook 'post-command-hook #'openclaw--pin-bottom nil t)
   (add-hook 'window-size-change-functions #'openclaw--center-window nil t)
@@ -1045,9 +1043,9 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   "(PROVIDER . MODEL) reported when the current/last run started.")
 
 (defface openclaw-context-usage '((t))
-  "Face for the context use percentage in the chat header line.
-Unset by default, so the mode-line foreground (like the line number
-there) is used; set attributes here to override it.")
+  "Face for the context use percentage in the chat mode line.
+Unset by default, so the mode-line foreground is used; set attributes
+here to override it.")
 
 (defun openclaw--chat-session ()
   "Session plist of the current chat buffer."
@@ -1099,8 +1097,8 @@ else the context window."
                          (or (plist-get s :contextTokens)
                              (plist-get openclaw--sessions-defaults :contextTokens)))))
               ((and (numberp used) (numberp limit) (> limit 0))))
-    ;; "%%%%" -> "%%", which the header line (a mode-line construct,
-    ;; where % starts a %-code) displays as a single %.
+    ;; "%%%%" -> "%%", which the mode line (where % starts a %-code)
+    ;; displays as a single %.
     (format "%s%d%%%%"
             ;; JSON false parses as nil, so "present but nil" means false.
             (if (and (plist-member s :totalTokensFresh)
@@ -1125,11 +1123,11 @@ The session's own mode, else its agent's default, as in the web UI."
     (when mode
       (or (cdr (assoc mode openclaw--permission-labels)) mode))))
 
-(defvar openclaw--header-permission-map
+(defvar openclaw--mode-line-permission-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [header-line mouse-1] #'openclaw-chat-set-permission)
+    (define-key map [mode-line mouse-1] #'openclaw-chat-set-permission)
     map)
-  "Keymap for the permission mode in the chat header line.")
+  "Keymap for the permission mode in the chat mode line.")
 
 (defun openclaw-chat-set-permission ()
   "Set this session's permission mode; choose \"agent default\" to clear it.
@@ -1160,11 +1158,11 @@ Full Access needs the operator.admin scope (see `openclaw-scopes')."
          (openclaw-sessions-refresh)
          (message "OpenClaw: permission mode set to %s" choice))))))
 
-(defvar openclaw--header-model-map
+(defvar openclaw--mode-line-model-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [header-line mouse-1] #'openclaw-chat-set-model)
+    (define-key map [mode-line mouse-1] #'openclaw-chat-set-model)
     map)
-  "Keymap for the model name in the chat header line.")
+  "Keymap for the model name in the chat mode line.")
 
 (defun openclaw-chat-set-model ()
   "Switch this session's model; choose \"agent default\" to clear it."
@@ -1228,7 +1226,7 @@ Full Access needs the operator.admin scope (see `openclaw-scopes')."
          (equal (plist-get (openclaw--chat-session) :status) "running"))))))
 
 (defun openclaw--blink ()
-  "Toggle the blink phase and redraw busy header lines only.
+  "Toggle the blink phase and redraw busy chats' mode lines only.
 Stops itself once no chat is busy."
   (setq openclaw--blink-on (not openclaw--blink-on))
   (let (any)
@@ -1242,34 +1240,40 @@ Stops itself once no chat is busy."
 
 (defun openclaw--busy-dot ()
   "Return a ● that blinks while busy.
-When idle it's drawn in the header's background colour, so it keeps
-its place and the model doesn't shift."
-  (let ((bg (face-background 'header-line nil t)))
+When idle it's drawn in the mode line's background colour, so it keeps
+its place and the rest doesn't shift."
+  (let ((bg (face-background (if (mode-line-window-selected-p) 'mode-line 'mode-line-inactive)
+                             nil t)))
     (cond ((and openclaw--busy openclaw--blink-on) (propertize "●" 'face 'success))
           (bg (propertize "●" 'face `(:foreground ,bg)))
           (t " "))))
 
-(defun openclaw--header-line ()
-  "Header line: active model and context use, sticky like agent-shell's.
-Colours follow the built-in mode-line faces: the model like an
-emphasized mode-line item (`mode-line-emphasis'), the percentage like
-the line number (the `mode-line' foreground)."
-  (concat " " (openclaw--busy-dot) " "
-          (when-let* ((model (openclaw--session-model)))
-            (propertize model 'face 'mode-line-emphasis
-                        'mouse-face 'mode-line-highlight
-                        'help-echo "mouse-1: switch model"
-                        'local-map openclaw--header-model-map))
-          (when-let* ((mode (openclaw--permission-mode)))
-            (concat "  " (propertize mode 'mouse-face 'mode-line-highlight
-                                     'help-echo "mouse-1: set permission mode"
-                                     'local-map openclaw--header-permission-map)))
-          (when-let* ((usage (openclaw--context-usage)))
-            (let ((fg (face-foreground 'mode-line nil t)))
-              (concat "  " (propertize usage 'face
-                                       (if fg
-                                           `(openclaw-context-usage (:foreground ,fg))
-                                         'openclaw-context-usage)))))))
+(defun openclaw--mode-line ()
+  "Return the chat mode line: session name left, session state right.
+At the right edge: the model (click to switch), context use, permission
+mode (click to set) and a ● that blinks while the agent is working.  The
+name is shortened to keep the right side in view."
+  (let* ((right (concat
+                 (when-let* ((model (openclaw--session-model)))
+                   (propertize model 'face 'mode-line-emphasis
+                               'mouse-face 'mode-line-highlight
+                               'help-echo "mouse-1: switch model"
+                               'local-map openclaw--mode-line-model-map))
+                 (when-let* ((usage (openclaw--context-usage)))
+                   (concat " " (propertize usage 'face 'openclaw-context-usage)))
+                 (when-let* ((mode (openclaw--permission-mode)))
+                   (concat "  " (propertize mode 'mouse-face 'mode-line-highlight
+                                            'help-echo "mouse-1: set permission mode"
+                                            'local-map openclaw--mode-line-permission-map)))
+                 " " (openclaw--busy-dot) " "))
+         ;; The usage's "%%" shows as one column.
+         (width (string-width (string-replace "%%" "%" right)))
+         (name (truncate-string-to-width (openclaw--chat-title)
+                                         (max 1 (- (window-total-width) width 2))
+                                         nil nil "…")))
+    (concat " " (string-replace "%" "%%" name)
+            (propertize " " 'display `(space :align-to (- right ,width)))
+            right)))
 
 (defun openclaw--fill-nobreak-p ()
   "Don't break where the next line would start with Markdown syntax.

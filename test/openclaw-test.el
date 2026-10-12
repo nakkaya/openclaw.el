@@ -223,7 +223,7 @@
        (should (string-match-p "^El Nuro\n\nmessage number 0" (buffer-string)))))
     (openclaw-test--kill-chats)))
 
-(ert-deftest openclaw-test-header-and-usage ()
+(ert-deftest openclaw-test-mode-line-and-usage ()
   (openclaw-test--with-gateway
    (with-current-buffer (openclaw-test--open-chat "k5")
      (setq openclaw--sessions (list (list :key "k5" :model "m" :modelProvider "p"
@@ -231,11 +231,11 @@
                                           :totalTokensFresh nil)))
      (should (equal (openclaw--context-usage) "~25%%"))
      (let ((openclaw--models nil))
-       (should (string-match-p "p/m" (openclaw--header-line))))))
+       (should (string-match-p "p/m ~25%%" (openclaw--mode-line))))))
   (openclaw-test--kill-chats))
 
-(ert-deftest openclaw-test-header-model-name ()
-  "The header names the model as the gateway does, e.g. the machine."
+(ert-deftest openclaw-test-mode-line-model-name ()
+  "The mode line names the model as the gateway does, e.g. the machine."
   (let ((openclaw--models '((:provider "claude-remote" :id "dev-core"
                              :name "Claude Code (dev-core)")
                             (:provider "deepseek" :id "v4" :name "DeepSeek V4"))))
@@ -260,12 +260,12 @@
        (should (equal (openclaw--session-model) "solo/solo"))))
     (openclaw-test--kill-chats)))
 
-(ert-deftest openclaw-test-header-permission-mode ()
-  "The header shows the session's permission mode, else the agent's default."
+(ert-deftest openclaw-test-mode-line-permission-mode ()
+  "The mode line shows the session's permission mode, else the agent's default."
   (let ((openclaw--agents '(:defaultId "a" :agents ((:id "a" :defaultPermissionMode "full")))))
     (openclaw-test--with-gateway
      (with-current-buffer (openclaw-test--open-chat "pm")
-       (should (string-match-p "  Full Access" (openclaw--header-line)))
+       (should (string-match-p "  Full Access" (openclaw--mode-line)))
        (setq openclaw--sessions (list (list :key "pm" :permissionMode "read-only")))
        (should (equal (openclaw--permission-mode) "Read Only"))
        (let ((openclaw--agents nil))
@@ -1048,14 +1048,41 @@ expanded, it has the body's, as it then starts the body's first line."
     (openclaw-sessions-mode)
     (should (equal mode-line-format " Sessions")))
   (openclaw-test--kill-sidebar)
-  (let ((openclaw--sessions (list (list :key "k1" :displayName "100% done"))))
-    (with-temp-buffer
-      (openclaw-chat-mode)
-      (setq openclaw--session-key "k1")
-      (should (equal (eval (cadr mode-line-format)) " 100%% done"))
-      ;; Renamed: the mode line follows.
-      (setq openclaw--sessions (list (list :key "k1" :displayName "Renamed")))
-      (should (equal (eval (cadr mode-line-format)) " Renamed")))))
+  (should-not (with-temp-buffer (openclaw-chat-mode) header-line-format)))
+
+(ert-deftest openclaw-test-mode-line-layout ()
+  "Name on the left, the rest aligned right; the name gives way in narrow windows."
+  (let ((openclaw--models nil)
+        (openclaw--agents nil))
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "ml")
+       (setq openclaw--sessions (list (list :key "ml" :displayName "100% done" :model "m"
+                                            :modelProvider "p" :permissionMode "guarded")))
+       (let* ((line (openclaw--mode-line))
+              (right "p/m  Guarded ● ")
+              (gap (string-search " p/m" line)))
+         (should (string-prefix-p " 100%% done" line))   ; % escaped for the mode line
+         ;; Idle, the dot is hidden (or a space without mode-line colours).
+         (should (string-match-p "p/m  Guarded [● ] \\'" line))
+         ;; The gap before the right part aligns it to the right edge.
+         (should (equal (get-text-property gap 'display line)
+                        `(space :align-to (- right ,(length right))))))
+       ;; Busy: the dot shows; the model and mode keep their click maps.
+       (let ((openclaw--busy t) (openclaw--blink-on t))
+         (let ((line (openclaw--mode-line)))
+           (should (eq (get-text-property (string-search "●" line) 'face line) 'success))
+           (should (eq (get-text-property (string-search "p/m" line) 'local-map line)
+                       openclaw--mode-line-model-map))
+           (should (eq (get-text-property (string-search "Guarded" line) 'local-map line)
+                       openclaw--mode-line-permission-map))))
+       ;; Narrow: the name is shortened, the right side kept whole.
+       (setq openclaw--sessions (list (list :key "ml" :displayName (make-string 200 ?x)
+                                            :model "m" :modelProvider "p")))
+       (let ((line (openclaw--mode-line)))
+         (should (string-search "…" line))
+         (should (string-match-p "p/m [● ] \\'" line))
+         (should (<= (string-width line) (window-total-width)))))))
+  (openclaw-test--kill-chats))
 
 (ert-deftest openclaw-test-open-from-sidebar-in-last-window ()
   "From the sidebar, a session opens in the split used last, not always the same one."
