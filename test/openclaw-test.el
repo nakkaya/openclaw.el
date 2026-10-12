@@ -1057,6 +1057,25 @@ expanded, it has the body's, as it then starts the body's first line."
       (setq openclaw--sessions (list (list :key "k1" :displayName "Renamed")))
       (should (equal (eval (cadr mode-line-format)) " Renamed")))))
 
+(ert-deftest openclaw-test-open-from-sidebar-in-last-window ()
+  "From the sidebar, a session opens in the split used last, not always the same one."
+  (openclaw-test--with-gateway
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((top (selected-window))
+            (bottom (split-window-below))
+            (side (display-buffer-in-side-window (get-buffer-create "*openclaw-sessions*")
+                                                 '((side . left) (slot . 0)))))
+       (cl-loop for w in (list top bottom) for key in '("wtop" "wbottom") do
+         (select-window w)
+         (select-window side)
+         (let ((buf (openclaw-test--open-chat key)))
+           (should (eq (window-buffer w) buf))
+           (should (eq (selected-window) w))))
+       (should (= 3 (length (window-list))))))) ; no new split
+  (openclaw-test--kill-chats)
+  (openclaw-test--kill-sidebar))
+
 (ert-deftest openclaw-test-switch-to-chat ()
   "C-c C-b offers the other open chats by name, the last used as default."
   (openclaw-test--with-gateway

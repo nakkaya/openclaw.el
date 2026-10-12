@@ -2124,9 +2124,10 @@ run the new messages are fetched when it ends."
         ;; Already mid-run (e.g. started elsewhere): blink from the start.
         (when (equal (plist-get session :status) "running")
           (openclaw--set-busy t))))
-    ;; From the sidebar, open in the window to its right.
+    ;; From the sidebar, open in the window used last before it, so
+    ;; sessions can be opened in different splits.
     (when (window-parameter (selected-window) 'window-side)
-      (select-window (or (window-in-direction 'right) (split-window-right))))
+      (select-window (or (get-mru-window nil nil t) (split-window-right))))
     (switch-to-buffer buf)
     ;; `switch-to-buffer' restores the window's old point, which may
     ;; be inside the read-only transcript.
