@@ -633,9 +633,14 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                                             (when callback (funcall callback))))))))
 
 (defun openclaw--sessions-on-event (event _payload)
-  "Refresh the sidebar shortly after a sessions.changed EVENT."
+  "Refresh the session list shortly after a sessions.changed EVENT.
+Only while an openclaw buffer shows it: the sidebar, the home view or a
+chat (its mode line has the session's model and permission mode)."
   (when (and (equal event "sessions.changed")
-             (get-buffer openclaw--sidebar-buffer))
+             (or (get-buffer openclaw--sidebar-buffer)
+                 (get-buffer openclaw--home-buffer)
+                 (seq-some (lambda (b) (buffer-local-value 'openclaw--session-key b))
+                           (buffer-list))))
     (when openclaw--refresh-timer (cancel-timer openclaw--refresh-timer))
     (setq openclaw--refresh-timer
           (run-with-timer 1 nil (lambda ()
@@ -2078,7 +2083,7 @@ missing newlines (display only) until the stored messages replace it."
                            ((or "end" "error")
                             (openclaw--set-busy nil)
                             (openclaw--chat-update)
-                            ;; Token use changed; refresh it for the header.
+                            ;; Token use changed; refresh it for the mode line.
                             (openclaw-sessions-refresh))))))))))
 
 (add-hook 'openclaw-event-functions #'openclaw--chat-on-event)

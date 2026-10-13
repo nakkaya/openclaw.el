@@ -1322,6 +1322,28 @@ chats not on screen stay unread."
      (should-not openclaw-test--requests)))
   (openclaw-test--kill-sidebar))
 
+;; Not only the sidebar uses the session list: chats' mode lines and the
+;; home view do too.
+(ert-deftest openclaw-test-refresh-without-sidebar ()
+  "A sessions.changed refreshes the session list whenever an openclaw
+buffer is open, e.g. just a chat; with none open, it doesn't."
+  (openclaw-test--kill-sidebar)
+  (openclaw-test--with-gateway
+   (should-not (get-buffer "*openclaw-sessions*"))
+   (with-current-buffer (openclaw-test--open-chat "nr")
+     (setq openclaw--refresh-timer nil)
+     (openclaw--sessions-on-event "sessions.changed" nil)
+     (should openclaw--refresh-timer)
+     (let ((timer openclaw--refresh-timer))
+       (cancel-timer timer)
+       (setq openclaw-test--requests nil)
+       (apply (timer--function timer) (timer--args timer))
+       (should (openclaw-test--request "sessions.groups.list")))))
+  (openclaw-test--kill-chats)
+  (setq openclaw--refresh-timer nil)
+  (openclaw--sessions-on-event "sessions.changed" nil)
+  (should-not openclaw--refresh-timer))
+
 ;;;; Connection
 
 (ert-deftest openclaw-test-chat-while-disconnected ()
