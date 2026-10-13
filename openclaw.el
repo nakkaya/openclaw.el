@@ -111,6 +111,27 @@
   "Scopes requested when connecting."
   :type '(repeat string))
 
+(defcustom openclaw-agent-name nil
+  "Name shown in the chat input prompt.
+When nil, use the name the gateway reports for the session's agent."
+  :type '(choice (const nil) string))
+
+(defcustom openclaw-user-name nil
+  "Name shown on your messages.
+When nil, use the gateway owner's display name, or \"You\" without one."
+  :type '(choice (const nil) string))
+
+(defcustom openclaw-fill-column 80
+  "Column at which chat text is filled, regardless of `fill-column'."
+  :type 'natnum)
+
+(defcustom openclaw-center-messages t
+  "Non-nil to center chat messages in the window.
+Tables and code wider than `openclaw-fill-column' are centered on their
+own width, or stay flush left when wider than the window.  Takes
+effect for newly opened chat buffers."
+  :type 'boolean)
+
 (defvar openclaw-event-functions nil
   "Abnormal hook run with (EVENT PAYLOAD) for every gateway event.")
 
@@ -146,6 +167,8 @@
 (defconst openclaw--client-id "cli")
 (defconst openclaw--client-mode "cli")
 (defconst openclaw--role "operator")
+(defconst openclaw--sidebar-buffer "*openclaw-sessions*")
+(defconst openclaw--home-buffer "*openclaw*")
 
 ;;;; Device identity
 
@@ -176,8 +199,9 @@
   (let ((file (openclaw--device-file "device.json")))
     (unless (file-exists-p file)
       (user-error "No device key; run M-x openclaw-generate-device-key"))
-    (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string))
-                       :object-type 'plist)))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (json-parse-buffer :object-type 'plist))))
 
 (defun openclaw--write-identity (identity)
   "Save IDENTITY plist to device.json."
@@ -459,7 +483,7 @@ open chats."
 
 (defun openclaw--sidebar-fit (&optional window)
   "Size the sidebar WINDOW to its widest line plus 2, at most 1/4 of the frame."
-  (when-let* ((w (or window (get-buffer-window "*openclaw-sessions*" t))))
+  (when-let* ((w (or window (get-buffer-window openclaw--sidebar-buffer t))))
     (let* ((text (with-current-buffer (window-buffer w)
                    (save-excursion
                      (goto-char (point-min))
@@ -471,8 +495,8 @@ open chats."
                          (forward-line 1))
                        m))))
            (target (min (+ text 2) (/ (frame-width (window-frame w)) 4))))
-      (ignore-errors
-        (window-resize w (- target (window-body-width w)) t t)))))
+      ;; As far as the frame allows.
+      (window-resize w (window-resizable w (- target (window-body-width w)) t t) t t))))
 
 (defvar openclaw--groups nil "Group plists from the last `sessions.groups.list'.")
 (defvar openclaw--refresh-timer nil)
@@ -504,6 +528,27 @@ open chats."
   "Display name of session S."
   (or (plist-get s :displayName) (plist-get s :label) (plist-get s :key)))
 
+(defun openclaw--session (key)
+  "Session plist of KEY from the last session list, or nil."
+  (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions))
+
+(defun openclaw--visible-sessions ()
+  "Sessions shown to you (not archived or background), newest first."
+  (sort (seq-remove (lambda (s) (or (plist-get s :archived) (plist-get s :isBackground)))
+                    openclaw--sessions)
+        (lambda (a b) (> (or (plist-get a :updatedAt) 0)
+                         (or (plist-get b :updatedAt) 0)))))
+
+(defun openclaw--agent-id (session)
+  "Id of SESSION's agent, else of the gateway's default agent."
+  (or (plist-get session :agentId) (plist-get openclaw--agents :defaultId)))
+
+(defun openclaw--agent (session)
+  "Plist of SESSION's agent, from the last `agents.list'."
+  (let ((id (openclaw--agent-id session)))
+    (seq-find (lambda (a) (equal (plist-get a :id) id))
+              (plist-get openclaw--agents :agents))))
+
 (defun openclaw--session-line (s)
   "Sidebar line for session S, with its status marker."
   (concat (pcase (plist-get s :status)
@@ -524,22 +569,18 @@ open chats."
 
 (defun openclaw--render-sidebar ()
   "Redraw the sidebar from the last session list."
-  (let* ((visible (seq-remove (lambda (s) (or (plist-get s :archived)
-                                              (plist-get s :isBackground)))
-                              openclaw--sessions))
+  (let* ((visible (openclaw--visible-sessions))
          (keys (mapcar (lambda (s) (plist-get s :key)) visible))
          (children (make-hash-table :test #'equal))
          roots)
-    (dolist (s (sort (copy-sequence visible)
-                     (lambda (a b) (> (or (plist-get a :updatedAt) 0)
-                                      (or (plist-get b :updatedAt) 0)))))
+    (dolist (s visible)
       (let ((parent (plist-get s :parentSessionKey)))
         (if (and parent (member parent keys))
             (push s (gethash parent children))
           (push s roots))))
     (setq roots (nreverse roots))
     (maphash (lambda (k v) (puthash k (nreverse v) children)) children)
-    (with-current-buffer (get-buffer-create "*openclaw-sessions*")
+    (with-current-buffer (get-buffer-create openclaw--sidebar-buffer)
       (let ((inhibit-read-only t)
             (line (line-number-at-pos)))
         (erase-buffer)
@@ -572,7 +613,7 @@ open chats."
 With FIT (interactively, `g'), also resize the sidebar to its content.
 Automatic refreshes don't resize, so the window doesn't jump around.
 CALLBACK, if non-nil, is called once the sessions are loaded."
-  (interactive (list t))
+  (interactive (list t) openclaw-sessions-mode)
   (openclaw-request "sessions.groups.list" nil
                     (lambda (ok res)
                       (when ok (setq openclaw--groups (plist-get res :groups)))
@@ -583,9 +624,9 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
                                             (setq openclaw--sessions (plist-get res :sessions)
                                                   openclaw--sessions-defaults (plist-get res :defaults))
                                             (openclaw--mark-shown-read)
-                                            (when (get-buffer "*openclaw-sessions*")
+                                            (when (get-buffer openclaw--sidebar-buffer)
                                               (openclaw--render-sidebar))
-                                            (when (get-buffer "*openclaw*")
+                                            (when (get-buffer openclaw--home-buffer)
                                               (openclaw--render-home))
                                             (force-mode-line-update t) ; chat mode lines
                                             (when fit (openclaw--sidebar-fit))
@@ -594,7 +635,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
 (defun openclaw--sessions-on-event (event _payload)
   "Refresh the sidebar shortly after a sessions.changed EVENT."
   (when (and (equal event "sessions.changed")
-             (get-buffer "*openclaw-sessions*"))
+             (get-buffer openclaw--sidebar-buffer))
     (when openclaw--refresh-timer (cancel-timer openclaw--refresh-timer))
     (setq openclaw--refresh-timer
           (run-with-timer 1 nil (lambda ()
@@ -605,7 +646,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
 
 (defun openclaw-sessions-visit ()
   "Open the chat buffer for the session at point."
-  (interactive)
+  (interactive nil openclaw-sessions-mode)
   (let ((section (or (magit-current-section) (user-error "No session at point"))))
     (if (eq (oref section type) 'openclaw-session)
         (openclaw-chat (oref section value))
@@ -613,7 +654,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
 
 (defun openclaw-sessions-mouse-visit (event)
   "Open the session clicked in EVENT (or toggle the clicked group)."
-  (interactive "e")
+  (interactive "e" openclaw-sessions-mode)
   (mouse-set-point event)
   (openclaw-sessions-visit))
 
@@ -623,7 +664,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
   (openclaw-sessions-refresh t)
   (select-window
    (display-buffer-in-side-window
-    (get-buffer-create "*openclaw-sessions*")
+    (get-buffer-create openclaw--sidebar-buffer)
     `((side . left) (slot . 0) (window-width . openclaw--sidebar-fit)
       (window-parameters . ((no-delete-other-windows . t)))))))
 
@@ -735,21 +776,14 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
     (dolist (l lines)
       (insert pad l "\n"))))
 
-(defvar openclaw-fill-column)
-
 (defun openclaw--render-home ()
   "Redraw the home view from the last session list."
-  (with-current-buffer (get-buffer-create "*openclaw*")
+  (with-current-buffer (get-buffer-create openclaw--home-buffer)
     (let* ((inhibit-read-only t)
            (line (line-number-at-pos))
            (name (openclaw--agent-name))
            (banner (openclaw--banner name))
-           (recent (seq-take (sort (seq-remove (lambda (s) (or (plist-get s :archived)
-                                                               (plist-get s :isBackground)))
-                                               openclaw--sessions)
-                                   (lambda (a b) (> (or (plist-get a :updatedAt) 0)
-                                                    (or (plist-get b :updatedAt) 0))))
-                             5))
+           (recent (seq-take (openclaw--visible-sessions) 5))
            (lines (mapcar #'openclaw--session-line recent))
            (width (apply #'max 0 (mapcar #'string-width lines))))
       (unless (derived-mode-p 'openclaw-home-mode) (openclaw-home-mode))
@@ -780,14 +814,14 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
 
 (defun openclaw-home-visit ()
   "Open the session on this line of the home view."
-  (interactive)
+  (interactive nil openclaw-home-mode)
   (openclaw-chat (or (and (< (line-beginning-position) (line-end-position))
                           (get-text-property (1- (line-end-position)) 'openclaw-session))
                      (user-error "No session on this line"))))
 
 (defun openclaw-home-mouse-visit (event)
   "Open the session clicked in EVENT."
-  (interactive "e")
+  (interactive "e" openclaw-home-mode)
   (mouse-set-point event)
   (openclaw-home-visit))
 
@@ -798,7 +832,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
   (let ((main (if (window-parameter nil 'window-side)
                   (seq-find (lambda (w) (not (window-parameter w 'window-side))) (window-list))
                 (selected-window))))
-    (set-window-buffer main "*openclaw*")
+    (set-window-buffer main openclaw--home-buffer)
     (openclaw--home-center main)))
 
 (defun openclaw--section-group ()
@@ -817,7 +851,8 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
    (list (read-string "Session name (empty for default): ")
          (let ((names (mapcar (lambda (g) (plist-get g :name)) openclaw--groups)))
            (completing-read "Group (empty for none): " names nil t nil nil
-                            (openclaw--section-group)))))
+                            (openclaw--section-group))))
+   openclaw-sessions-mode)
   (openclaw-request "sessions.create"
                     (append (unless (string-empty-p label) `(:label ,label))
                             (unless (string-empty-p group) `(:category ,group)))
@@ -833,7 +868,7 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
          (key (and section
                    (eq (oref section type) 'openclaw-session)
                    (oref section value))))
-    (or (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions)
+    (or (openclaw--session key)
         (user-error "No session at point"))))
 
 (defun openclaw--patch-session (session params what &optional then)
@@ -851,13 +886,14 @@ called once the session list is reloaded."
   (interactive
    (let ((s (openclaw--session-at-point)))
      (list s (read-string "Rename to (empty for default): "
-                          (or (plist-get s :label) (plist-get s :displayName))))))
+                          (or (plist-get s :label) (plist-get s :displayName)))))
+   openclaw-sessions-mode)
   (let ((key (plist-get session :key)))
     (openclaw--patch-session
      session `(:label ,(if (string-empty-p name) :null name)) "rename"
      (lambda ()
        (when-let* ((buf (openclaw--chat-buffer key))
-                   (s (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions)))
+                   (s (openclaw--session key)))
          (with-current-buffer buf
            (rename-buffer (format "*openclaw: %s*" (openclaw--session-name s)) t)))))))
 
@@ -867,7 +903,8 @@ An empty GROUP takes the session out of its group."
   (interactive
    (let ((s (openclaw--session-at-point)))
      (list s (completing-read "Move to group (new name creates it, empty for none): "
-                              (mapcar (lambda (g) (plist-get g :name)) openclaw--groups)))))
+                              (mapcar (lambda (g) (plist-get g :name)) openclaw--groups))))
+   openclaw-sessions-mode)
   (let ((names (mapcar (lambda (g) (plist-get g :name)) openclaw--groups))
         (patch (lambda ()
                  (openclaw--patch-session
@@ -885,12 +922,23 @@ An empty GROUP takes the session out of its group."
 
 (defun openclaw-sessions-help ()
   "Show the sidebar's keys in the echo area."
-  (interactive)
-  (message "RET open  c create  r rename  m move  a archive  k delete  g refresh  TAB fold  C-c C-b/C-c C-j switch"))
+  (interactive nil openclaw-sessions-mode)
+  (message "%s" (substitute-command-keys
+                 (concat "\\<openclaw-sessions-mode-map>"
+                         "\\[openclaw-sessions-visit] open  "
+                         "\\[openclaw-sessions-create] create  "
+                         "\\[openclaw-sessions-rename] rename  "
+                         "\\[openclaw-sessions-move] move  "
+                         "\\[openclaw-sessions-archive] archive  "
+                         "\\[openclaw-sessions-delete] delete  "
+                         "\\[openclaw-sessions-refresh] refresh  "
+                         "\\[magit-section-toggle] fold  "
+                         "\\[openclaw-switch-to-chat] switch  "
+                         "\\[openclaw-open-session] open any"))))
 
 (defun openclaw-sessions-archive ()
   "Archive the session at point (hides it; restorable from the web UI)."
-  (interactive)
+  (interactive nil openclaw-sessions-mode)
   (let ((session (openclaw--session-at-point)))
     (when (y-or-n-p (format "Archive session \"%s\"? " (openclaw--session-name session)))
       (openclaw-request "sessions.patch"
@@ -904,7 +952,7 @@ An empty GROUP takes the session out of its group."
 (defun openclaw-sessions-delete ()
   "Delete the session at point, including its transcript.
 Requires the operator.admin scope."
-  (interactive)
+  (interactive nil openclaw-sessions-mode)
   (let* ((session (openclaw--session-at-point))
          (key (plist-get session :key)))
     (when (yes-or-no-p (format "Delete session \"%s\" and its transcript? "
@@ -921,36 +969,10 @@ Requires the operator.admin scope."
 
 ;;;; Chat buffer
 
-(defcustom openclaw-agent-name nil
-  "Name shown in the chat input prompt.
-When nil, use the name the gateway reports for the session's agent."
-  :type '(choice (const nil) string))
-
-(defcustom openclaw-user-name nil
-  "Name shown on your messages.
-When nil, use the gateway owner's display name, or \"You\" without one."
-  :type '(choice (const nil) string))
-
-(defcustom openclaw-fill-column 80
-  "Column at which chat text is filled, regardless of `fill-column'."
-  :type 'natnum)
-
-(defcustom openclaw-center-messages t
-  "Non-nil to center chat messages in the window.
-Tables and code wider than `openclaw-fill-column' are centered on their
-own width, or stay flush left when wider than the window.  Takes
-effect for newly opened chat buffers."
-  :type 'boolean)
-
 (defun openclaw--agent-name ()
   "Prompt name for the current chat buffer."
   (or openclaw-agent-name
-      (let* ((session (seq-find (lambda (s) (equal (plist-get s :key) openclaw--session-key))
-                                openclaw--sessions))
-             (id (or (plist-get session :agentId) (plist-get openclaw--agents :defaultId)))
-             (agent (seq-find (lambda (a) (equal (plist-get a :id) id))
-                              (plist-get openclaw--agents :agents))))
-        (plist-get agent :name))
+      (plist-get (openclaw--agent (openclaw--session openclaw--session-key)) :name)
       "openclaw"))
 
 (defun openclaw--user-name ()
@@ -1017,12 +1039,12 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   ;; markdown-mode lets font-lock strip `rear-nonsticky', which would
   ;; make the read-only prompt sticky and block typing after it.  It
   ;; comes from `font-lock-defaults', applied when font-lock starts.
-  (setq font-lock-defaults
-        (mapcar (lambda (x)
-                  (if (eq (car-safe x) 'font-lock-extra-managed-props)
-                      (cons (car x) (remq 'rear-nonsticky (cdr x)))
-                    x))
-                font-lock-defaults))
+  (setq-local font-lock-defaults
+              (mapcar (lambda (x)
+                        (if (eq (car-safe x) 'font-lock-extra-managed-props)
+                            (cons (car x) (remq 'rear-nonsticky (cdr x)))
+                          x))
+                      font-lock-defaults))
   (setq-local fill-column openclaw-fill-column)
   ;; Highlight code blocks with their language's major mode.
   (setq-local markdown-fontify-code-blocks-natively t)
@@ -1049,8 +1071,7 @@ here to override it.")
 
 (defun openclaw--chat-session ()
   "Session plist of the current chat buffer."
-  (seq-find (lambda (s) (equal (plist-get s :key) openclaw--session-key))
-            openclaw--sessions))
+  (openclaw--session openclaw--session-key))
 
 (defun openclaw--chat-title ()
   "Name of the current chat's session."
@@ -1115,24 +1136,19 @@ else the context window."
   "Name of this chat's permission mode, or nil if unknown.
 The session's own mode, else its agent's default, as in the web UI."
   (let* ((s (openclaw--chat-session))
-         (id (or (plist-get s :agentId) (plist-get openclaw--agents :defaultId)))
-         (agent (seq-find (lambda (a) (equal (plist-get a :id) id))
-                          (plist-get openclaw--agents :agents)))
          (mode (or (plist-get s :permissionMode)
-                   (plist-get agent :defaultPermissionMode))))
+                   (plist-get (openclaw--agent s) :defaultPermissionMode))))
     (when mode
       (or (cdr (assoc mode openclaw--permission-labels)) mode))))
 
-(defvar openclaw--mode-line-permission-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map [mode-line mouse-1] #'openclaw-chat-set-permission)
-    map)
-  "Keymap for the permission mode in the chat mode line.")
+(defvar-keymap openclaw--mode-line-permission-map
+  :doc "Keymap for the permission mode in the chat mode line."
+  "<mode-line> <mouse-1>" #'openclaw-chat-set-permission)
 
 (defun openclaw-chat-set-permission ()
   "Set this session's permission mode; choose \"agent default\" to clear it.
 Full Access needs the operator.admin scope (see `openclaw-scopes')."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (let* ((buf (current-buffer))
          (key openclaw--session-key)
          (default "agent default")
@@ -1158,19 +1174,16 @@ Full Access needs the operator.admin scope (see `openclaw-scopes')."
          (openclaw-sessions-refresh)
          (message "OpenClaw: permission mode set to %s" choice))))))
 
-(defvar openclaw--mode-line-model-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map [mode-line mouse-1] #'openclaw-chat-set-model)
-    map)
-  "Keymap for the model name in the chat mode line.")
+(defvar-keymap openclaw--mode-line-model-map
+  :doc "Keymap for the model name in the chat mode line."
+  "<mode-line> <mouse-1>" #'openclaw-chat-set-model)
 
 (defun openclaw-chat-set-model ()
   "Switch this session's model; choose \"agent default\" to clear it."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (let* ((buf (current-buffer))
          (key openclaw--session-key)
-         (session (openclaw--chat-session))
-         (agent (or (plist-get session :agentId) (plist-get openclaw--agents :defaultId))))
+         (agent (openclaw--agent-id (openclaw--chat-session))))
     (openclaw-request
      "models.list" `(:agentId ,agent :view "default")
      (lambda (ok res)
@@ -1334,6 +1347,8 @@ Their arguments (whole scripts, long queries) make poor one-liners.")
     (insert (propertize label 'font-lock-face face) "\n")
     (let ((head (make-overlay start (1- (point))))
           (body (make-overlay (point) (point))))
+      (overlay-put head 'openclaw t)
+      (overlay-put body 'openclaw t)
       (overlay-put body 'invisible t)
       (overlay-put head 'openclaw-body body)
       (overlay-put head 'keymap openclaw-fold-map)
@@ -1527,11 +1542,11 @@ Keeps one message's unclosed fence from turning later ones into code."
         (forward-line 1)))
     (if open (concat text "\n" open) text)))
 
-(defun openclaw-chat-toggle-fold ()
-  "Expand or collapse the block at point."
-  (interactive)
-  (when (mouse-event-p last-input-event)
-    (posn-set-point (event-start last-input-event)))
+(defun openclaw-chat-toggle-fold (&optional event)
+  "Expand or collapse the block at point, or the one clicked in EVENT."
+  (interactive (list last-input-event) openclaw-chat-mode)
+  (when (mouse-event-p event)
+    (posn-set-point (event-start event)))
   (let ((head (seq-find (lambda (o) (overlay-get o 'openclaw-body))
                         (overlays-in (line-beginning-position) (line-end-position)))))
     (unless head (user-error "No collapsible block here"))
@@ -1816,7 +1831,8 @@ widths (slow: markdown-mode's emphasis matching is costly)."
             (forward-line 1)))
         (when (invisible-p 'markdown-markup)
           (font-lock-ensure beg table-end))
-        (ignore-errors (openclaw--align-table beg table-end))
+        (with-demoted-errors "OpenClaw: table not aligned: %S"
+          (openclaw--align-table beg table-end))
         (goto-char table-end)))))
 
 (defun openclaw--line-col (pos)
@@ -1862,8 +1878,9 @@ Windows scrolled back into the transcript keep their place."
                         (- m openclaw--input-marker)
                       (openclaw--line-col m))))
          (views (openclaw--scrolled-views)))
+    ;; Only our overlays: others belong to other modes (e.g. hl-line).
+    (remove-overlays (point-min) (point-max) 'openclaw t)
     (erase-buffer)
-    (delete-all-overlays)
     (setq openclaw--turn-start nil)
     (let ((results (openclaw--tool-results messages)))
       (dolist (m messages)
@@ -1894,7 +1911,7 @@ Windows scrolled back into the transcript keep their place."
 
 (defun openclaw-chat-reload ()
   "Reload the transcript from the gateway."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (let ((buf (current-buffer)))
     (openclaw-request "chat.history" `(:sessionKey ,openclaw--session-key :limit 200)
                       (lambda (ok res)
@@ -1942,8 +1959,7 @@ formatted; without a usable cursor, reload the whole transcript."
         (beg (or openclaw--turn-start openclaw--live-marker))
         (views (openclaw--scrolled-views)))
     (save-excursion
-      (dolist (o (overlays-in beg openclaw--live-marker))
-        (delete-overlay o))
+      (remove-overlays beg openclaw--live-marker 'openclaw t)
       (delete-region beg openclaw--live-marker)
       (goto-char beg)
       (let ((results (openclaw--tool-results messages)))
@@ -2002,7 +2018,8 @@ missing newlines (display only) until the stored messages replace it."
                         ((not (eq (char-before (1- pos)) ?\n)) 1)
                         (t 0))))
     (unless (and openclaw--gap-overlay (overlay-buffer openclaw--gap-overlay))
-      (setq openclaw--gap-overlay (make-overlay pos pos)))
+      (setq openclaw--gap-overlay (make-overlay pos pos))
+      (overlay-put openclaw--gap-overlay 'openclaw t))
     (move-overlay openclaw--gap-overlay pos pos)
     (overlay-put openclaw--gap-overlay 'before-string
                  (and (> missing 0) (make-string missing ?\n)))))
@@ -2088,8 +2105,7 @@ run the new messages are fetched when it ends."
 (defun openclaw--load-commands ()
   "Fetch the slash commands this chat accepts."
   (let ((buf (current-buffer))
-        (agent (or (plist-get (openclaw--chat-session) :agentId)
-                   (plist-get openclaw--agents :defaultId))))
+        (agent (openclaw--agent-id (openclaw--chat-session))))
     (openclaw-request "commands.list"
                       `(,@(when agent `(:agentId ,agent))
                         :sessionKey ,openclaw--session-key :scope "text")
@@ -2122,7 +2138,7 @@ run the new messages are fetched when it ends."
   ;; A new buffer needs the gateway to load; fail before creating it.
   (unless (or (openclaw--chat-buffer key) (openclaw-connected-p))
     (user-error "OpenClaw not connected"))
-  (let* ((session (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions))
+  (let* ((session (openclaw--session key))
          (buf (or (openclaw--chat-buffer key)
                   (generate-new-buffer
                    (format "*openclaw: %s*" (if session (openclaw--session-name session) key))))))
@@ -2186,19 +2202,14 @@ ignores case.  A name used by several gets its group added."
      (openclaw--read-session
       "Switch to chat"
       (mapcar (lambda (key)
-                (or (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions)
-                    (list :key key)))
+                (or (openclaw--session key) (list :key key)))
               keys)
       t))))
 
 (defun openclaw-open-session ()
   "Open any session, newest first, like ERC's `erc-join-channel'."
   (interactive)
-  (let ((sessions (sort (seq-remove (lambda (s) (or (plist-get s :archived)
-                                                    (plist-get s :isBackground)))
-                                    openclaw--sessions)
-                        (lambda (a b) (> (or (plist-get a :updatedAt) 0)
-                                         (or (plist-get b :updatedAt) 0))))))
+  (let ((sessions (openclaw--visible-sessions)))
     (unless sessions (user-error "No sessions; is OpenClaw connected?"))
     (openclaw-chat (openclaw--read-session "Open session" sessions))))
 
@@ -2264,6 +2275,7 @@ calls .org files Lotus Organizer and .el files application/*)."
     (let ((pos (save-excursion (goto-char openclaw--input-marker)
                                (line-beginning-position))))
       (setq openclaw--attachments-overlay (make-overlay pos pos))
+      (overlay-put openclaw--attachments-overlay 'openclaw t)
       (overlay-put openclaw--attachments-overlay 'before-string
                    (mapconcat (lambda (a)
                                 (concat (propertize (openclaw--attachment-text
@@ -2275,7 +2287,7 @@ calls .org files Lotus Organizer and .el files application/*)."
 (defun openclaw-chat-attach (&optional remove)
   "Attach a file to the message being written; it is sent with it.
 With prefix argument REMOVE, remove a staged attachment instead."
-  (interactive "P")
+  (interactive "P" openclaw-chat-mode)
   (if remove
       (let* ((names (or (mapcar (lambda (a) (plist-get a :name)) openclaw--attachments)
                         (user-error "No attachments")))
@@ -2306,7 +2318,7 @@ With prefix argument REMOVE, remove a staged attachment instead."
 
 (defun openclaw-chat-send ()
   "Send the input area to the session."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (let ((text (string-trim (buffer-substring-no-properties openclaw--input-marker (point-max))))
         (attachments openclaw--attachments))
     (when (string-empty-p text)
@@ -2373,7 +2385,7 @@ With prefix argument REMOVE, remove a staged attachment instead."
 
 (defun openclaw-chat-previous-message ()
   "Move to the previous message you sent."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (let ((match (save-excursion
                  (beginning-of-line)
                  (text-property-search-backward 'font-lock-face 'openclaw-user t))))
@@ -2382,7 +2394,7 @@ With prefix argument REMOVE, remove a staged attachment instead."
 
 (defun openclaw-chat-next-message ()
   "Move to the next message you sent; after the last, to the input."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (let ((match (save-excursion
                  (end-of-line)
                  (text-property-search-forward 'font-lock-face 'openclaw-user t))))
@@ -2392,20 +2404,20 @@ With prefix argument REMOVE, remove a staged attachment instead."
 
 (defun openclaw-chat-beginning-of-line (&optional n)
   "Move to the beginning of line N, stopping after the prompt (eshell-style)."
-  (interactive "^p")
+  (interactive "^p" openclaw-chat-mode)
   (move-beginning-of-line n))
 
 (defun openclaw-chat-return ()
   "Send the input when in the input area, otherwise jump to it.
 RET on a collapsed block header toggles it instead (its own keymap)."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (if (>= (point) openclaw--input-marker)
       (openclaw-chat-send)
     (openclaw--goto-end)))
 
 (defun openclaw-chat-abort ()
   "Abort the running turn in this session."
-  (interactive)
+  (interactive nil openclaw-chat-mode)
   (openclaw-request "chat.abort" `(:sessionKey ,openclaw--session-key)
                     (lambda (ok res)
                       (if ok

@@ -1534,7 +1534,6 @@ chats not on screen stay unread."
 
 (ert-deftest openclaw-test-reload-keeps-foreign-overlays ()
   "A reload leaves other modes' overlays (e.g. hl-line's) alone."
-  :expected-result :failed
   (openclaw-test--with-gateway
    (with-current-buffer (openclaw-test--open-chat "fo")
      (let ((ov (make-overlay (point-min) (+ (point-min) 5))))
@@ -1594,7 +1593,6 @@ chats not on screen stay unread."
 
 (ert-deftest openclaw-test-commands-belong-to-their-modes ()
   "M-x offers chat, sidebar and home commands only in their own buffers."
-  :expected-result :failed
   (dolist (c '(openclaw-chat-send openclaw-chat-abort openclaw-chat-attach
                openclaw-chat-reload openclaw-chat-set-model openclaw-chat-set-permission))
     (should (memq 'openclaw-chat-mode (command-modes c))))
@@ -1617,7 +1615,6 @@ chats not on screen stay unread."
 
 (ert-deftest openclaw-test-sessions-help-follows-rebinding ()
   "Rebinding a sidebar key changes what ? shows."
-  :expected-result :failed
   (let ((openclaw-sessions-mode-map (copy-keymap openclaw-sessions-mode-map))
         shown)
     (keymap-set openclaw-sessions-mode-map "c" nil)
