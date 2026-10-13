@@ -1513,6 +1513,185 @@ chats not on screen stay unread."
         (should (zerop (call-process "openssl" nil nil nil "pkeyutl" "-verify" "-rawin"
                                      "-pubin" "-inkey" pub "-sigfile" sigf "-in" msgf)))))))
 
+;;;; Idiomatic-cleanup safety net
+;; Behaviour the cleanup must keep, and (marked :expected-result
+;; :failed) the behaviour some of its changes are meant to bring.
+
+(ert-deftest openclaw-test-reload-keeps-own-overlays ()
+  "After a full reload, openclaw's own overlays work: folds, staged attachments."
+  (openclaw-test--with-files ((txt "a.txt" "hello\n"))
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "ov" (openclaw-test--turn 1))
+       (cl-letf (((symbol-function 'read-file-name) (lambda (&rest _) txt)))
+         (openclaw-chat-attach))
+       (openclaw-chat-reload)
+       (openclaw-test--reply "chat.history" (list :messages (openclaw-test--turn 1)))
+       (should (string-match-p "📎 a.txt"
+                               (overlay-get openclaw--attachments-overlay 'before-string)))
+       (should (= 2 (cl-count-if (lambda (o) (overlay-get o 'openclaw-body))
+                                 (overlays-in (point-min) (point-max))))))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-reload-keeps-foreign-overlays ()
+  "A reload leaves other modes' overlays (e.g. hl-line's) alone."
+  :expected-result :failed
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "fo")
+     (let ((ov (make-overlay (point-min) (+ (point-min) 5))))
+       (overlay-put ov 'face 'highlight)
+       (openclaw-chat-reload)
+       (openclaw-test--reply "chat.history" (list :messages (openclaw-test--messages 4)))
+       (should (overlay-buffer ov)))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-table-align-error-still-renders ()
+  "If aligning a table fails, the message is still shown."
+  (openclaw-test--with-gateway
+   (cl-letf (((symbol-function 'openclaw--align-table)
+              (lambda (&rest _) (error "Boom"))))
+     (with-current-buffer (openclaw-test--open-chat
+                           "te" (list (list :role "assistant"
+                                            :content "| a | b |\n|-|-|\n| 1 | 2 |\n\nAfter.")))
+       (should (string-match-p "| 1 | 2 |" (buffer-string)))
+       (should (string-match-p "After\\." (buffer-string))))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-sidebar-fit ()
+  "The sidebar is sized to its widest line plus 2, at most a quarter of the frame."
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((openclaw--groups nil)
+          (openclaw--sessions (list (list :key "a" :displayName "Short")
+                                    (list :key "b" :displayName "A somewhat longer name"))))
+      (get-buffer-create "*openclaw-sessions*")
+      (openclaw--render-sidebar)
+      (let ((w (display-buffer-in-side-window (get-buffer "*openclaw-sessions*")
+                                              '((side . left) (slot . 0)))))
+        (openclaw--sidebar-fit w)
+        (should (= (window-body-width w)
+                   (min (+ 2 (string-width "  A somewhat longer name"))
+                        (/ (frame-width) 4))))
+        ;; A long name is capped at a quarter of the frame.
+        (setq openclaw--sessions (list (list :key "c" :displayName (make-string 300 ?x))))
+        (openclaw--render-sidebar)
+        (openclaw--sidebar-fit w)
+        (should (<= (window-body-width w) (/ (frame-width) 4))))))
+  (openclaw-test--kill-sidebar))
+
+(ert-deftest openclaw-test-commands-run-interactively ()
+  "Chat, sidebar and home commands still run from their buffers via M-x."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "ci")
+     (call-interactively #'openclaw-chat-abort)
+     (should (openclaw-test--request "chat.abort"))
+     (call-interactively #'openclaw-chat-reload)
+     (should (openclaw-test--request "chat.history"))))
+  (openclaw-test--kill-chats)
+  (with-current-buffer (get-buffer-create "*openclaw-sessions*")
+    (openclaw-sessions-mode)
+    (call-interactively #'openclaw-sessions-help))
+  (openclaw-test--kill-sidebar))
+
+(ert-deftest openclaw-test-commands-belong-to-their-modes ()
+  "M-x offers chat, sidebar and home commands only in their own buffers."
+  :expected-result :failed
+  (dolist (c '(openclaw-chat-send openclaw-chat-abort openclaw-chat-attach
+               openclaw-chat-reload openclaw-chat-set-model openclaw-chat-set-permission))
+    (should (memq 'openclaw-chat-mode (command-modes c))))
+  (dolist (c '(openclaw-sessions-create openclaw-sessions-rename openclaw-sessions-move
+               openclaw-sessions-archive openclaw-sessions-delete openclaw-sessions-help))
+    (should (memq 'openclaw-sessions-mode (command-modes c))))
+  (should (memq 'openclaw-home-mode (command-modes 'openclaw-home-visit))))
+
+(ert-deftest openclaw-test-sessions-help ()
+  "The sidebar's ? names the keys of its commands."
+  (let (shown)
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (setq shown (apply #'format fmt args)))))
+      (with-current-buffer (get-buffer-create "*openclaw-sessions*")
+        (openclaw-sessions-mode)
+        (openclaw-sessions-help)))
+    (dolist (k '("RET" "c" "r" "m" "a" "k" "g" "C-c C-b" "C-c C-j"))
+      (should (string-match-p (concat "\\(?:\\`\\|[ /]\\)" (regexp-quote k) "[ /]") shown))))
+  (openclaw-test--kill-sidebar))
+
+(ert-deftest openclaw-test-sessions-help-follows-rebinding ()
+  "Rebinding a sidebar key changes what ? shows."
+  :expected-result :failed
+  (let ((openclaw-sessions-mode-map (copy-keymap openclaw-sessions-mode-map))
+        shown)
+    (keymap-set openclaw-sessions-mode-map "c" nil)
+    (keymap-set openclaw-sessions-mode-map "N" #'openclaw-sessions-create)
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (setq shown (apply #'format fmt args)))))
+      (with-current-buffer (get-buffer-create "*openclaw-sessions*")
+        (openclaw-sessions-mode)
+        (use-local-map openclaw-sessions-mode-map)
+        (openclaw-sessions-help)))
+    (should (string-match-p "\\(?:\\`\\| \\)N create" shown)))
+  (openclaw-test--kill-sidebar))
+
+(ert-deftest openclaw-test-mode-line-clicks ()
+  "Clicking the model or the permission mode in the mode line runs their commands."
+  (should (eq (lookup-key openclaw--mode-line-model-map [mode-line mouse-1])
+              #'openclaw-chat-set-model))
+  (should (eq (lookup-key openclaw--mode-line-permission-map [mode-line mouse-1])
+              #'openclaw-chat-set-permission)))
+
+(ert-deftest openclaw-test-set-model ()
+  "C-c C-v lists the agent's available models and patches the session."
+  (let ((openclaw--agents '(:defaultId "a" :agents ((:id "a"))))
+        offered)
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "sm")
+       (setq openclaw--sessions (list (list :key "sm" :agentId "a")))
+       (openclaw-chat-set-model)
+       (should (equal (openclaw-test--params "models.list") '(:agentId "a" :view "default")))
+       (cl-letf (((symbol-function 'completing-read)
+                  (lambda (_prompt choices &rest _) (setq offered choices) "p/m1")))
+         (openclaw-test--reply "models.list"
+                               '(:models ((:provider "p" :id "m1" :name "M One")
+                                          (:provider "p" :id "m2" :available nil)))))
+       (should (equal offered '("agent default" "p/m1")))
+       (should (equal (openclaw-test--params "sessions.patch") '(:key "sm" :model "p/m1")))
+       ;; "agent default" clears it.
+       (openclaw-chat-set-model)
+       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "agent default")))
+         (openclaw-test--reply "models.list" '(:models ((:provider "p" :id "m1")))))
+       (should (equal (openclaw-test--params "sessions.patch") '(:key "sm" :model :null))))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-typing-after-prompt-with-font-lock ()
+  "With font-lock on, the read-only prompt doesn't block typing after it."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "fl" (openclaw-test--turn 1))
+     (font-lock-mode 1)
+     (font-lock-ensure)
+     (goto-char (point-max))
+     (insert "typed")
+     (should (string-suffix-p "> typed" (buffer-string)))
+     (should-not (get-text-property (1- (point-max)) 'read-only))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-fold-toggle-by-mouse ()
+  "Clicking a ▶ header toggles that block, wherever point was."
+  (openclaw-test--with-gateway
+   (save-window-excursion
+     (delete-other-windows)
+     (switch-to-buffer (openclaw-test--open-chat "fm" (openclaw-test--turn 1)))
+     (goto-char (point-min))
+     (search-forward "Terminal")
+     (let* ((head (seq-find (lambda (o) (overlay-get o 'openclaw-body))
+                            (overlays-in (line-beginning-position) (line-end-position))))
+            (body (overlay-get head 'openclaw-body))
+            (pos (point)))
+       (goto-char (point-max))
+       ;; A click at POS: (WINDOW POS (X . Y) TIMESTAMP).
+       (let ((last-input-event `(mouse-1 (,(selected-window) ,pos (0 . 0) 0))))
+         (call-interactively #'openclaw-chat-toggle-fold))
+       (should-not (overlay-get body 'invisible)))))
+  (openclaw-test--kill-chats))
+
 (provide 'openclaw-test)
 
 ;;; openclaw-test.el ends here
