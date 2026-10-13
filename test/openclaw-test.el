@@ -356,6 +356,33 @@
     (should (equal (buffer-string)
                    "one two three four\nfive six seven eight\n\n# H\n\ntext\n\n```\na  b   c d e f g h i j k l m\n```\n"))))
 
+(ert-deftest openclaw-test-fill-blockquote ()
+  "A blockquote is filled inside its > markers: its paragraphs, blank quote
+lines and list items stay apart, and wrapped lines keep the marker."
+  (with-temp-buffer
+    (setq fill-column 30)
+    (insert "Intro:\n\n"
+            "> First paragraph of the quote that is long enough to wrap.\n"
+            ">\n"
+            "> A list:\n"
+            "> - one\n"
+            "> - two\n"
+            ">\n"
+            "> Last.\n"
+            "\nAfter.\n")
+    (openclaw--fill-markdown (point-min) (point-max))
+    (should (equal (buffer-string)
+                   (concat "Intro:\n\n"
+                           "> First paragraph of the quote\n"
+                           "> that is long enough to wrap.\n"
+                           ">\n"
+                           "> A list:\n"
+                           "> - one\n"
+                           "> - two\n"
+                           ">\n"
+                           "> Last.\n"
+                           "\nAfter.\n")))))
+
 (ert-deftest openclaw-test-fill-code-block-spacing ()
   "A code block gets a blank line before and after if it has none."
   (with-temp-buffer

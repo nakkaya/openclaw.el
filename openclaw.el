@@ -1610,6 +1610,27 @@ they extend sideways instead of wrapping."
             (insert "\n")))
          ((or in-fence (looking-at skip))
           (forward-line 1))
+         ;; A blockquote: fill what's inside the > markers like any
+         ;; other text, then put the markers back on every line.
+         ((looking-at "[ \t]*>")
+          (let ((qstart (point))
+                (column (- fill-column 2))
+                (nobreak fill-nobreak-predicate))
+            (while (and (< (point) end) (looking-at "[ \t]*>"))
+              (forward-line 1))
+            (let* ((text (replace-regexp-in-string
+                          "^[ \t]*> ?" "" (buffer-substring qstart (point))))
+                   (inner (with-temp-buffer
+                           (setq fill-column column)
+                           (setq-local fill-nobreak-predicate nobreak)
+                           (insert text)
+                           (openclaw--fill-markdown (point-min) (point-max))
+                           (string-remove-suffix "\n" (buffer-string)))))
+              (delete-region qstart (point))
+              (insert (mapconcat (lambda (l) (if (string-empty-p l) ">" (concat "> " l)))
+                                 (split-string inner "\n")
+                                 "\n")
+                      "\n"))))
          (t
           ;; A paragraph or list item runs until a blank, special or
           ;; new list-item line.
