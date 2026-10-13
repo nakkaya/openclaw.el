@@ -212,6 +212,7 @@ effect for newly opened chat buffers."
         (insert (json-serialize identity))))
     (set-file-modes file #o600)))
 
+;;;###autoload
 (defun openclaw-generate-device-key ()
   "Generate an Ed25519 device key used to pair Emacs with the gateway."
   (interactive)
@@ -451,6 +452,7 @@ open chats."
               (openclaw-request "sessions.messages.subscribe" `(:key ,openclaw--session-key))
               (openclaw-chat-reload)))))))))
 
+;;;###autoload
 (defun openclaw-connect (&optional callback)
   "Connect to the OpenClaw gateway; call CALLBACK once connected."
   (interactive)
@@ -663,6 +665,7 @@ chat (its mode line has the session's model and permission mode)."
   (mouse-set-point event)
   (openclaw-sessions-visit))
 
+;;;###autoload
 (defun openclaw-sidebar ()
   "Show the sessions sidebar."
   (interactive)
@@ -678,6 +681,7 @@ chat (its mode line has the session's model and permission mode)."
   (openclaw-home)
   (openclaw-sidebar))
 
+;;;###autoload
 (defun openclaw ()
   "Connect to OpenClaw and show the home view and the sessions sidebar."
   (interactive)
@@ -830,6 +834,7 @@ chat (its mode line has the session's model and permission mode)."
   (mouse-set-point event)
   (openclaw-home-visit))
 
+;;;###autoload
 (defun openclaw-home ()
   "Show the agent banner and recent sessions in the main window."
   (interactive)
@@ -2195,6 +2200,7 @@ ignores case.  A name used by several gets its group added."
                  nil t nil nil (and default (caar choices)))
                 choices))))
 
+;;;###autoload
 (defun openclaw-switch-to-chat ()
   "Switch to another open chat, last used first, like ERC's `erc-switch-to-buffer'."
   (interactive)
@@ -2211,6 +2217,7 @@ ignores case.  A name used by several gets its group added."
               keys)
       t))))
 
+;;;###autoload
 (defun openclaw-open-session ()
   "Open any session, newest first, like ERC's `erc-join-channel'."
   (interactive)

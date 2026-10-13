@@ -1344,6 +1344,27 @@ buffer is open, e.g. just a chat; with none open, it doesn't."
   (openclaw--sessions-on-event "sessions.changed" nil)
   (should-not openclaw--refresh-timer))
 
+(ert-deftest openclaw-test-autoloads ()
+  "The entry commands are autoloaded, so they exist before the package loads.
+Generates the autoloads file as package installation does."
+  (openclaw-test--with-temp-dir dir
+    (let ((out (expand-file-name "openclaw-autoloads.el" dir)))
+      (copy-file (locate-library "openclaw.el") dir)
+      (loaddefs-generate dir out)
+      ;; The interactive (autoload 'COMMAND "openclaw" DOC t) forms.
+      (let ((commands (with-temp-buffer
+                        (insert-file-contents out)
+                        (cl-loop for form = (ignore-error end-of-file (read (current-buffer)))
+                                 while form
+                                 when (and (eq (car-safe form) 'autoload)
+                                           (equal (nth 2 form) "openclaw")
+                                           (nth 4 form))
+                                 collect (cadr (nth 1 form))))))
+        (dolist (cmd '(openclaw openclaw-connect openclaw-sidebar openclaw-home
+                       openclaw-generate-device-key openclaw-open-session
+                       openclaw-switch-to-chat))
+          (should (memq cmd commands)))))))
+
 ;;;; Connection
 
 (ert-deftest openclaw-test-chat-while-disconnected ()
