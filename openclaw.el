@@ -89,6 +89,7 @@
 (require 'magit-section)
 (require 'markdown-mode)
 (require 'mailcap)
+(require 'text-property-search)
 
 (defgroup openclaw nil
   "Control an OpenClaw gateway."
@@ -560,14 +561,16 @@ open chats."
           (propertize (openclaw--session-name s)
                       'font-lock-face (if (plist-get s :unread) 'font-lock-builtin-face 'default))))
 
-(defun openclaw--insert-sessions (sessions children)
-  "Insert SESSIONS, each followed by its CHILDREN (key -> list)."
-  (dolist (s sessions)
-    (let ((kids (gethash (plist-get s :key) children)))
-      (magit-insert-section (openclaw-session (plist-get s :key) t)
-        (magit-insert-heading (openclaw--session-line s))
-        (when kids
-          (openclaw--insert-sessions kids children))))))
+(defun openclaw--insert-sessions (sessions children &optional depth)
+  "Insert SESSIONS, each followed by its CHILDREN (key -> list).
+Each level of DEPTH indents by two columns."
+  (let ((depth (or depth 0)))
+    (dolist (s sessions)
+      (let ((kids (gethash (plist-get s :key) children)))
+        (magit-insert-section (openclaw-session (plist-get s :key) t)
+          (magit-insert-heading (make-string (* 2 depth) ?\s) (openclaw--session-line s))
+          (when kids
+            (openclaw--insert-sessions kids children (1+ depth))))))))
 
 (defun openclaw--render-sidebar ()
   "Redraw the sidebar from the last session list."
@@ -1037,6 +1040,9 @@ stored messages when the run ends.")
   "C-<up>" #'openclaw-chat-previous-message
   "C-<down>" #'openclaw-chat-next-message
   "C-c C-a" #'openclaw-chat-attach
+  "C-c C-f" #'openclaw-chat-fork
+  "C-c C-w" #'openclaw-chat-rewind
+  "C-c C-e" #'openclaw-chat-switch-branch
   ;; Same keys as ERC.
   "C-c C-b" #'openclaw-switch-to-chat
   "C-c C-j" #'openclaw-open-session)
@@ -1701,7 +1707,8 @@ markup, so table widths match what the chat shows."
 (defun openclaw--insert-message (msg results)
   "Insert MSG, using RESULTS (from `openclaw--tool-results')."
   (let ((role (plist-get msg :role))
-        (content (plist-get msg :content)))
+        (content (plist-get msg :content))
+        (start (point)))
     (when (member role '("user" "assistant"))
       (openclaw--insert-header role)
       (if (stringp content)
@@ -1732,7 +1739,11 @@ markup, so table widths match what the chat shows."
       (openclaw--insert-attachment-lines
        (mapcar (lambda (m) (cons (plist-get m :fileName) (or (plist-get m :sizeBytes) 0)))
                (plist-get (plist-get msg :__openclaw) :media)))
-      (insert "\n"))))
+      (insert "\n")
+      ;; Your messages are where forks and rewinds cut the transcript.
+      (when-let* (((equal role "user"))
+                  (id (plist-get (plist-get msg :__openclaw) :id)))
+        (put-text-property start (point) 'openclaw-entry id)))))
 
 (defun openclaw--goto-end ()
   "Move point to the end, with the prompt on the last line of each window."
@@ -1919,18 +1930,29 @@ Windows scrolled back into the transcript keep their place."
                     (openclaw--line-col-pos mark-at))))
     (openclaw--restore-views views)))
 
-(defun openclaw-chat-reload ()
-  "Reload the transcript from the gateway."
+(defun openclaw-chat-reload (&optional tries)
+  "Reload the transcript from the gateway.
+While history is briefly unavailable (e.g. rebuilding right after a
+rewind), try again every second, TRIES times (default 10)."
   (interactive nil openclaw-chat-mode)
-  (let ((buf (current-buffer)))
+  (let ((buf (current-buffer))
+        (tries (or tries 10)))
     (openclaw-request "chat.history" `(:sessionKey ,openclaw--session-key :limit 200)
                       (lambda (ok res)
                         (when (buffer-live-p buf)
                           (with-current-buffer buf
-                            (if (not ok)
-                                (message "OpenClaw: %s" (plist-get res :message))
+                            (cond
+                             ((and (not ok) (equal (plist-get res :code) "UNAVAILABLE")
+                                   (> tries 1))
+                              (run-with-timer 1 nil
+                                              (lambda ()
+                                                (when (and (buffer-live-p buf) (openclaw-connected-p))
+                                                  (with-current-buffer buf
+                                                    (openclaw-chat-reload (1- tries)))))))
+                             ((not ok) (message "OpenClaw: %s" (plist-get res :message)))
+                             (t
                               (setq openclaw--history-cursor (plist-get res :deltaCursor))
-                              (openclaw--chat-render (plist-get res :messages)))))))))
+                              (openclaw--chat-render (plist-get res :messages))))))))))
 
 (defvar-local openclaw--live-text-start nil
   "Start of the reply text being streamed.")
@@ -2435,6 +2457,101 @@ RET on a collapsed block header toggles it instead (its own keymap)."
                       (if ok
                           (message "OpenClaw: aborted")
                         (message "OpenClaw abort failed: %s" (plist-get res :message))))))
+
+;;;;; Forks, rewind and branches: cut the transcript before one of your
+;; messages.  A fork copies what came before into a new session; a
+;; rewind drops what came after in place, keeping it as a branch.
+
+(defun openclaw--entry-at-point ()
+  "Transcript entry id of your message at point, or the last one before it."
+  (or (get-text-property (point) 'openclaw-entry)
+      (when-let* ((match (save-excursion (text-property-search-backward 'openclaw-entry))))
+        (prop-match-value match))
+      (user-error "No message of yours here")))
+
+(defun openclaw--offer-input (text)
+  "Put TEXT in the empty input to edit and send; keep a draft there."
+  (when (and text (= openclaw--input-marker (point-max)))
+    (goto-char (point-max))
+    (insert text)
+    (openclaw--goto-end)))
+
+(defun openclaw-chat-fork ()
+  "Fork the session before your message at point into a new session.
+The new chat opens with that message in the input, to edit and send;
+this session is unchanged.  Elsewhere in a turn, fork before the
+message that started it."
+  (interactive nil openclaw-chat-mode)
+  (let ((entry (openclaw--entry-at-point))
+        (name (openclaw--chat-title)))
+    (openclaw-request
+     "sessions.fork" `(:sessionKey ,openclaw--session-key :entryId ,entry)
+     (lambda (ok res)
+       (if (not ok)
+           (message "OpenClaw fork failed: %s" (plist-get res :message))
+         (let* ((key (plist-get res :sessionKey))
+                ;; E.g. "Notes (aece)": the start of the fork's own id
+                ;; tells forks of one session apart.
+                (label (format "%s (%s)" name
+                               (string-limit (car (last (split-string key ":"))) 4))))
+           ;; Forks come unnamed; the sidebar lists them under this one.
+           (openclaw-request "sessions.patch" `(:key ,key :label ,label)
+                             (lambda (_ok _res) (openclaw-sessions-refresh)))
+           (openclaw-chat key)
+           (with-current-buffer (openclaw--chat-buffer key)
+             (rename-buffer (format "*openclaw: %s*" label) t)
+             (openclaw--offer-input (plist-get res :editorText)))))))))
+
+(defun openclaw-chat-rewind ()
+  "Rewind the session to before your message at point.
+The message comes back in the input to edit and send.  What was cut
+stays as a branch, to return to with \\[openclaw-chat-switch-branch]."
+  (interactive nil openclaw-chat-mode)
+  (let ((entry (openclaw--entry-at-point))
+        (buf (current-buffer)))
+    (when (y-or-n-p "Rewind the session to before this message? ")
+      (openclaw-request
+       "sessions.rewind" `(:sessionKey ,openclaw--session-key :entryId ,entry)
+       (lambda (ok res)
+         (if (not ok)
+             (message "OpenClaw rewind failed: %s" (plist-get res :message))
+           (when (buffer-live-p buf)
+             (with-current-buffer buf
+               (openclaw--offer-input (plist-get res :editorText))
+               (openclaw-chat-reload)))))))))
+
+(defun openclaw-chat-switch-branch ()
+  "Switch the session to another branch, e.g. one cut off by a rewind."
+  (interactive nil openclaw-chat-mode)
+  (let ((buf (current-buffer))
+        (key openclaw--session-key))
+    (openclaw-request
+     "sessions.branches.list" `(:sessionKey ,key)
+     (lambda (ok res)
+       (let ((branches
+              (cl-loop for b in (plist-get res :branches)
+                       unless (plist-get b :active)
+                       collect (cons (format "%s (%d messages)"
+                                             (truncate-string-to-width
+                                              (replace-regexp-in-string
+                                               "[\n ]+" " " (plist-get b :headline))
+                                              60 nil nil "…")
+                                             (plist-get b :messageCount))
+                                     (plist-get b :leafEntryId)))))
+         (cond
+          ((not ok) (message "OpenClaw: %s" (plist-get res :message)))
+          ((not branches) (message "OpenClaw: no other branch"))
+          (t
+           (openclaw-request
+            "sessions.branches.switch"
+            `(:sessionKey ,key
+              :leafEntryId ,(cdr (assoc (completing-read "Switch to branch: " branches nil t)
+                                        branches)))
+            (lambda (ok res)
+              (cond ((not ok)
+                     (message "OpenClaw branch switch failed: %s" (plist-get res :message)))
+                    ((buffer-live-p buf)
+                     (with-current-buffer buf (openclaw-chat-reload)))))))))))))
 
 (provide 'openclaw)
 ;;; openclaw.el ends here

@@ -818,6 +818,163 @@ it into the input still works, and the result can be edited."
        (should (equal (funcall cb t nil) "OpenClaw: aborted"))
        (should (equal (funcall cb nil '(:message "nope")) "OpenClaw abort failed: nope"))))))
 
+;;;; Forks, rewind and branches
+
+(defun openclaw-test--entries ()
+  "Two turns whose messages carry transcript entry ids e0..e3."
+  (cl-loop for i below 4
+           collect (list :role (if (cl-evenp i) "user" "assistant")
+                         :content (format "message %d" i)
+                         :__openclaw (list :id (format "e%d" i)))))
+
+(defun openclaw-test--goto-text (text)
+  "Move point into TEXT in the transcript."
+  (goto-char (point-min))
+  (search-forward text)
+  (backward-char 2))
+
+(ert-deftest openclaw-test-entry-at-point ()
+  "Your message at point, or the one starting the turn point is in."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "ep" (openclaw-test--entries))
+     (openclaw-test--goto-text "message 2")
+     (should (equal (openclaw--entry-at-point) "e2"))
+     (openclaw-test--goto-text "message 3")
+     (should (equal (openclaw--entry-at-point) "e2"))
+     (openclaw-test--goto-text "message 1")
+     (should (equal (openclaw--entry-at-point) "e0"))
+     ;; From the input: your last message.
+     (goto-char (point-max))
+     (should (equal (openclaw--entry-at-point) "e2"))
+     ;; Messages without an id (e.g. not stored yet) are skipped.
+     (openclaw--chat-render (list (list :role "user" :content "unsaved")))
+     (should-error (openclaw--entry-at-point) :type 'user-error)))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-fork ()
+  "C-c C-f forks before your message at point into a new chat, named with a short id,
+whose input holds that message."
+  (openclaw-test--with-gateway
+   (cl-letf (((symbol-function 'openclaw-sessions-refresh) #'ignore))
+     (with-current-buffer (openclaw-test--open-chat "fk" (openclaw-test--entries))
+       (should (eq (key-binding (kbd "C-c C-f")) 'openclaw-chat-fork))
+       (openclaw-test--goto-text "message 3")
+       (openclaw-chat-fork)
+       (should (equal (openclaw-test--params "sessions.fork")
+                      '(:sessionKey "fk" :entryId "e2")))
+       (openclaw-test--reply "sessions.fork" '(:sessionKey "agent:a:dashboard:5c73e5c7-8c97" :editorText "message 2"))
+       (should (equal (openclaw-test--params "sessions.patch")
+                      '(:key "agent:a:dashboard:5c73e5c7-8c97" :label "fk (5c73)")))
+       (let ((fork (openclaw--chat-buffer "agent:a:dashboard:5c73e5c7-8c97")))
+         (should fork)
+         (should (eq (window-buffer) fork))
+         (should (equal (buffer-name fork) "*openclaw: fk (5c73)*"))
+         (with-current-buffer fork
+           (openclaw-test--reply "chat.history"
+                                 (list :messages (seq-take (openclaw-test--entries) 2)))
+           (should (equal (buffer-substring-no-properties openclaw--input-marker (point-max))
+                          "message 2"))
+           (should (= (point) (point-max)))))
+       ;; A refused fork opens nothing.
+       (openclaw-chat-fork)
+       (should (equal (funcall (nth 2 (openclaw-test--request "sessions.fork"))
+                               nil '(:message "busy"))
+                      "OpenClaw fork failed: busy")))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-rewind ()
+  "C-c C-w cuts the session before your message at point, reloads, and
+puts the message back in the input; a draft there is kept."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "rw" (openclaw-test--entries))
+     (should (eq (key-binding (kbd "C-c C-w")) 'openclaw-chat-rewind))
+     (openclaw-test--goto-text "message 2")
+     (cl-letf (((symbol-function 'y-or-n-p) #'ignore))
+       (openclaw-chat-rewind)
+       (should-not (openclaw-test--request "sessions.rewind")))
+     (cl-letf (((symbol-function 'y-or-n-p) #'always))
+       (openclaw-chat-rewind)
+       (should (equal (openclaw-test--params "sessions.rewind")
+                      '(:sessionKey "rw" :entryId "e2")))
+       (openclaw-test--reply "sessions.rewind" '(:editorText "message 2"))
+       (openclaw-test--reply "chat.history"
+                             (list :messages (seq-take (openclaw-test--entries) 2)))
+       (should-not (string-match-p "message 3" (buffer-string)))
+       (should (equal (buffer-substring-no-properties openclaw--input-marker (point-max))
+                      "message 2"))
+       (should (= (point) (point-max)))
+       ;; A draft in the input stays.
+       (delete-region openclaw--input-marker (point-max))
+       (insert "draft")
+       (openclaw-test--goto-text "message 0")
+       (openclaw-chat-rewind)
+       (openclaw-test--reply "sessions.rewind" '(:editorText "message 0"))
+       (openclaw-test--reply "chat.history"
+                             (list :messages (seq-take (openclaw-test--entries) 2)))
+       (should (equal (buffer-substring-no-properties openclaw--input-marker (point-max))
+                      "draft"))
+       (openclaw-chat-rewind)
+       (should (equal (funcall (nth 2 (openclaw-test--request "sessions.rewind"))
+                               nil '(:message "busy"))
+                      "OpenClaw rewind failed: busy")))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-reload-retries-while-rebuilding ()
+  "Right after a rewind, history is briefly unavailable; reload retries
+instead of leaving the cut messages on screen."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "rb" (openclaw-test--entries))
+     (let (timers)
+       (cl-letf (((symbol-function 'run-with-timer)
+                  (lambda (_secs _repeat fn &rest args) (push (cons fn args) timers))))
+         (openclaw-chat-reload)
+         (funcall (nth 2 (openclaw-test--request "chat.history"))
+                  nil '(:code "UNAVAILABLE" :message "session history is rebuilding; retry shortly"))
+         (should (string-match-p "message 3" (buffer-string)))
+         (should (= (length timers) 1))
+         (setq openclaw-test--requests nil)
+         (apply (caar timers) (cdar timers))
+         (openclaw-test--reply "chat.history"
+                               (list :messages (seq-take (openclaw-test--entries) 2)))
+         (should-not (string-match-p "message 3" (buffer-string)))
+         ;; Other errors are reported, not retried.
+         (setq timers nil)
+         (openclaw-chat-reload)
+         (funcall (nth 2 (openclaw-test--request "chat.history"))
+                  nil '(:code "INVALID_REQUEST" :message "nope"))
+         (should-not timers)))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-switch-branch ()
+  "C-c C-e offers the inactive branches by headline and switches to one."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "br" (openclaw-test--entries))
+     (should (eq (key-binding (kbd "C-c C-e")) 'openclaw-chat-switch-branch))
+     (openclaw-chat-switch-branch)
+     (should (equal (openclaw-test--params "sessions.branches.list") '(:sessionKey "br")))
+     (let (offered)
+       (cl-letf (((symbol-function 'completing-read)
+                  (lambda (_prompt table &rest _)
+                    (setq offered (all-completions "" table))
+                    (car offered))))
+         (openclaw-test--reply "sessions.branches.list"
+                               '(:branches ((:leafEntryId "e3" :headline "three"
+                                             :messageCount 4 :active t)
+                                            (:leafEntryId "x3" :headline "two"
+                                             :messageCount 4 :active nil)))))
+       (should (equal offered '("two (4 messages)"))))
+     (should (equal (openclaw-test--params "sessions.branches.switch")
+                    '(:sessionKey "br" :leafEntryId "x3")))
+     (openclaw-test--reply "sessions.branches.switch" nil)
+     (should (openclaw-test--request "chat.history"))
+     ;; Only the active one: nothing to switch to.
+     (openclaw-chat-switch-branch)
+     (should (equal (funcall (nth 2 (openclaw-test--request "sessions.branches.list"))
+                             t '(:branches ((:leafEntryId "e3" :headline "three"
+                                             :messageCount 4 :active t))))
+                    "OpenClaw: no other branch"))))
+  (openclaw-test--kill-chats))
+
 ;;;; Attachments
 
 (ert-deftest openclaw-test-attachment-mime ()
@@ -1053,6 +1210,8 @@ expanded, it has the body's, as it then starts the body's first line."
     (with-current-buffer "*openclaw-sessions*"
       (should (string-match-p "Work" (buffer-string)))
       (should (string-match-p "× Gamma" (buffer-string)))
+      ;; Children (e.g. forks) sit indented under their parent.
+      (should (string-match-p "^  Alpha\n    Beta$" (buffer-string)))
       (goto-char (point-min))
       (search-forward "Delta")
       (should (eq (get-text-property (1- (point)) 'font-lock-face) 'font-lock-builtin-face))))

@@ -67,6 +67,9 @@ centered in the window.
 | =C-c C-j=            | Open any session, newest first              |
 | =C-c C-v=            | Switch the session's model                  |
 | =C-c C-r=            | Set the session's permission mode           |
+| =C-c C-f=            | Fork before your message at point           |
+| =C-c C-w=            | Rewind to before your message at point      |
+| =C-c C-e=            | Switch to another branch (after a rewind)   |
 | =C-c C-g=            | Reload the transcript                       |
 | =C-<up>=, =C-<down>= | Previous / next message you sent            |
 | =RET=, =TAB= on =▶=  | Expand or collapse thinking and tool output |
