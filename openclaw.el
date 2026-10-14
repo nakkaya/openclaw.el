@@ -1280,10 +1280,21 @@ set).  The name is shortened to keep the right side in view."
             (propertize " " 'display `(space :align-to (- right ,width)))
             right)))
 
+(defconst openclaw--link-regexp
+  "\\(\\[\\)[^]\n]*\\(](\\)\\(\\(?:[^() \n]\\|([^)\n]*)\\)+\\)\\()\\)"
+  "An inline link on one line: [ (group 1), ]( (2), the URL (3) and ) (4).")
+
 (defun openclaw--fill-nobreak-p ()
-  "Don't break where the next line would start with Markdown syntax.
-E.g. inline ``` moved to the start of a line opens a code fence."
-  (looking-at "[ \t]*\\(```\\|~~~\\|#+[ \t]\\|[-*+][ \t]\\|[0-9]+[.)][ \t]\\||\\|>\\)"))
+  "Don't break before Markdown syntax or inside a link.
+E.g. inline ``` moved to the start of a line opens a code fence.  A
+link split across lines may not be recognized by `markdown-mode'
+\(when it fontifies from the link's second line), showing its markup."
+  (or (looking-at "[ \t]*\\(```\\|~~~\\|#+[ \t]\\|[-*+][ \t]\\|[0-9]+[.)][ \t]\\||\\|>\\)")
+      (let ((pos (point)))
+        (save-excursion
+          (beginning-of-line)
+          (cl-loop while (re-search-forward openclaw--link-regexp (line-end-position) t)
+                   thereis (< (match-beginning 0) pos (match-end 0)))))))
 
 (defconst openclaw--fence-regexp "[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)"
   "A code fence line: three or more backticks or tildes (group 1).")
@@ -1681,12 +1692,30 @@ they extend sideways instead of wrapping."
 ;; inserted into the chat in one go.
 (defvar openclaw--format-buffer nil)
 
+(defun openclaw--hide-links ()
+  "Hide what the chat hides of each link, so filling measures it as drawn.
+With `markdown-hide-markup' the brackets and parentheses are hidden;
+with `markdown-hide-urls' the URL is drawn as one character.  E.g.
+\"[text](url)\" is drawn as \"text∞\", not 4 columns plus the URL."
+  (let ((markup (invisible-p 'markdown-markup)))
+    (add-to-invisibility-spec 'openclaw-hidden)
+    (goto-char (point-min))
+    (while (re-search-forward openclaw--link-regexp nil t)
+      (when markup
+        (dolist (group '(1 2 4))
+          (put-text-property (match-beginning group) (match-end group)
+                             'invisible 'openclaw-hidden)))
+      (when markdown-hide-urls
+        (put-text-property (1+ (match-beginning 3)) (match-end 3)
+                           'invisible 'openclaw-hidden)))))
+
 (defun openclaw--format (text)
   "Return TEXT with prose filled, tables aligned and wide blocks centered.
 Done outside the chat buffer, but with its fill column and hidden
-markup, so table widths match what the chat shows."
+markup and URLs, so line and table widths match what the chat shows."
   (let ((column fill-column)
-        (spec buffer-invisibility-spec))
+        (spec buffer-invisibility-spec)
+        (hide-urls markdown-hide-urls))
     (unless (buffer-live-p openclaw--format-buffer)
       (setq openclaw--format-buffer (generate-new-buffer " *openclaw-format*" t))
       (with-current-buffer openclaw--format-buffer
@@ -1695,8 +1724,10 @@ markup, so table widths match what the chat shows."
     (with-current-buffer openclaw--format-buffer
       (erase-buffer)
       (setq fill-column column
-            buffer-invisibility-spec spec)
+            buffer-invisibility-spec spec
+            markdown-hide-urls hide-urls)
       (insert text)
+      (openclaw--hide-links)
       (openclaw--fill-markdown (point-min) (point-max))
       (openclaw--align-tables)
       (let ((s (buffer-substring-no-properties (point-min) (point-max))))

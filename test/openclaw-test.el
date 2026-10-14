@@ -356,6 +356,33 @@
     (should (equal (buffer-string)
                    "one two three four\nfive six seven eight\n\n# H\n\ntext\n\n```\na  b   c d e f g h i j k l m\n```\n"))))
 
+(ert-deftest openclaw-test-fill-hidden-links ()
+  "With link markup and URLs hidden, prose fills to the width shown:
+\"[one source](URL)\" is drawn as \"one source∞\"."
+  (let ((text (concat "See [one source](https://example.com/a/very/long/path) and "
+                      "[two](https://example.com/b/long/url_(x)) for more words here.")))
+    (with-temp-buffer
+      ;; As the chat's own settings: the URL hiding is buffer-local.
+      (setq fill-column 40 buffer-invisibility-spec '(markdown-markup t))
+      (setq-local markdown-hide-urls t)
+      (should (equal (split-string (openclaw--format text) "\n" t)
+                     '("See [one source](https://example.com/a/very/long/path) and [two](https://example.com/b/long/url_(x)) for more words"
+                       "here."))))
+    ;; Shown in full, links count in full.
+    (with-temp-buffer
+      (setq fill-column 40 buffer-invisibility-spec '(t))
+      (setq-local markdown-hide-urls nil)
+      (should (equal (car (split-string (openclaw--format text) "\n" t))
+                     "See"))))
+  ;; A link is never split: markdown-mode may then not recognize it
+  ;; and show its markup.
+  (with-temp-buffer
+    (setq fill-column 30 buffer-invisibility-spec '(t))
+    (setq-local markdown-hide-urls nil)
+    (should (equal (split-string (openclaw--format "aaaa bbbb cccc dddd eeee [ffff gggg hhhh](http://x.y/z) iiii")
+                                 "\n" t)
+                   '("aaaa bbbb cccc dddd eeee" "[ffff gggg hhhh](http://x.y/z)" "iiii")))))
+
 (ert-deftest openclaw-test-fill-blockquote ()
   "A blockquote is filled inside its > markers: its paragraphs, blank quote
 lines and list items stay apart, and wrapped lines keep the marker."
