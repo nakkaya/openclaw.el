@@ -1451,6 +1451,31 @@ expanded, it has the body's, as it then starts the body's first line."
   (openclaw-test--kill-chats)
   (openclaw-test--kill-sidebar))
 
+(ert-deftest openclaw-test-create-in-new-group ()
+  "Creating a session in a group that doesn't exist yet creates the group."
+  (let ((openclaw--groups (list (list :name "Work")))
+        require-match)
+    (openclaw-test--with-gateway
+     (cl-letf (((symbol-function 'openclaw-sessions-refresh) #'ignore)
+               ((symbol-function 'openclaw-chat) #'ignore)
+               ((symbol-function 'read-string) (lambda (&rest _) "Notes"))
+               ((symbol-function 'completing-read)
+                (lambda (_prompt _table _pred req &rest _) (setq require-match req) "Fresh")))
+       (with-temp-buffer
+         (openclaw-sessions-mode)
+         (call-interactively #'openclaw-sessions-create))
+       (should-not require-match)
+       (should (equal (openclaw-test--params "sessions.groups.put") '(:names ["Work" "Fresh"])))
+       (should-not (openclaw-test--request "sessions.create"))
+       (openclaw-test--reply "sessions.groups.put" '(:ok t))
+       (should (equal (openclaw-test--params "sessions.create")
+                      '(:label "Notes" :category "Fresh")))
+       ;; An existing group: created directly.
+       (setq openclaw-test--requests nil)
+       (openclaw-sessions-create "" "Work")
+       (should-not (openclaw-test--request "sessions.groups.put"))
+       (should (equal (openclaw-test--params "sessions.create") '(:category "Work")))))))
+
 (ert-deftest openclaw-test-mark-read ()
   "Chats on screen are marked read when shown and after new activity;
 chats not on screen stay unread."

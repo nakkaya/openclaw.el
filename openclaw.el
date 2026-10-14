@@ -862,18 +862,35 @@ chat (its mode line has the session's model and permission mode)."
   "Create a session named LABEL in GROUP and open it."
   (interactive
    (list (read-string "Session name (empty for default): ")
-         (let ((names (mapcar (lambda (g) (plist-get g :name)) openclaw--groups)))
-           (completing-read "Group (empty for none): " names nil t nil nil
-                            (openclaw--section-group))))
+         (completing-read "Group (new name creates it, empty for none): "
+                          (mapcar (lambda (g) (plist-get g :name)) openclaw--groups)
+                          nil nil nil nil (openclaw--section-group)))
    openclaw-sessions-mode)
-  (openclaw-request "sessions.create"
-                    (append (unless (string-empty-p label) `(:label ,label))
-                            (unless (string-empty-p group) `(:category ,group)))
-                    (lambda (ok res)
-                      (if (not ok)
-                          (message "OpenClaw create failed: %s" (plist-get res :message))
-                        (openclaw-sessions-refresh)
-                        (openclaw-chat (plist-get res :key))))))
+  (openclaw--ensure-group
+   group
+   (lambda ()
+     (openclaw-request "sessions.create"
+                       (append (unless (string-empty-p label) `(:label ,label))
+                               (unless (string-empty-p group) `(:category ,group)))
+                       (lambda (ok res)
+                         (if (not ok)
+                             (message "OpenClaw create failed: %s" (plist-get res :message))
+                           (openclaw-sessions-refresh)
+                           (openclaw-chat (plist-get res :key))))))))
+
+(defun openclaw--ensure-group (group then)
+  "Create GROUP unless it exists or is empty, then call THEN."
+  (let ((names (mapcar (lambda (g) (plist-get g :name)) openclaw--groups)))
+    (if (or (string-empty-p group) (member group names))
+        (funcall then)
+      ;; `sessions.groups.put' replaces the whole list.
+      (openclaw-request "sessions.groups.put"
+                        `(:names ,(vconcat names (list group)))
+                        (lambda (ok res)
+                          (if ok
+                              (funcall then)
+                            (message "OpenClaw group create failed: %s"
+                                     (plist-get res :message))))))))
 
 (defun openclaw--session-at-point ()
   "Session plist at point in the sidebar."
@@ -918,20 +935,11 @@ An empty GROUP takes the session out of its group."
      (list s (completing-read "Move to group (new name creates it, empty for none): "
                               (mapcar (lambda (g) (plist-get g :name)) openclaw--groups))))
    openclaw-sessions-mode)
-  (let ((names (mapcar (lambda (g) (plist-get g :name)) openclaw--groups))
-        (patch (lambda ()
-                 (openclaw--patch-session
-                  session `(:category ,(if (string-empty-p group) :null group)) "move"))))
-    (if (or (string-empty-p group) (member group names))
-        (funcall patch)
-      ;; `sessions.groups.put' replaces the whole list.
-      (openclaw-request "sessions.groups.put"
-                        `(:names ,(vconcat names (list group)))
-                        (lambda (ok res)
-                          (if ok
-                              (funcall patch)
-                            (message "OpenClaw group create failed: %s"
-                                     (plist-get res :message))))))))
+  (openclaw--ensure-group
+   group
+   (lambda ()
+     (openclaw--patch-session
+      session `(:category ,(if (string-empty-p group) :null group)) "move"))))
 
 (defun openclaw-sessions-help ()
   "Show the sidebar's keys in the echo area."
