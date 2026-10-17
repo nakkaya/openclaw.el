@@ -1055,6 +1055,18 @@ stored messages when the run ends.")
   "C-c C-b" #'openclaw-switch-to-chat
   "C-c C-j" #'openclaw-open-session)
 
+(defun openclaw--outside-code (regexp)
+  "Return a font-lock matcher for REGEXP that skips code.
+That is code blocks and inline code."
+  (lambda (last)
+    (let (found)
+      (while (and (not found) (re-search-forward regexp last t))
+        (let ((pos (match-beginning 0)))
+          (unless (save-match-data (or (markdown-code-block-at-pos pos)
+                                       (markdown-inline-code-at-pos-p pos)))
+            (setq found t))))
+      found)))
+
 (define-derived-mode openclaw-chat-mode gfm-mode "OpenClaw"
   "Chat with an OpenClaw session.
 Prose is filled to `fill-column'; tables and code extend sideways."
@@ -1069,6 +1081,15 @@ Prose is filled to `fill-column'; tables and code extend sideways."
                             (cons (car x) (remq 'rear-nonsticky (cdr x)))
                           x))
                       font-lock-defaults))
+  ;; markdown-mode finds footnotes ([^x], ^[x]) even in code, e.g.
+  ;; Clojure's [^Module m], raising the text and hiding the brackets.
+  (setq-local markdown-mode-font-lock-keywords
+              (mapcar (lambda (k)
+                        (if (member (car k) (list markdown-regex-footnote
+                                                  markdown-regex-pandoc-inline-footnote))
+                            (cons (openclaw--outside-code (car k)) (cdr k))
+                          k))
+                      markdown-mode-font-lock-keywords))
   (setq-local fill-column openclaw-fill-column)
   ;; Highlight code blocks with their language's major mode.
   (setq-local markdown-fontify-code-blocks-natively t)

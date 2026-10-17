@@ -157,6 +157,24 @@
                    (ensure-list (get-text-property (1- (point)) 'face))))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-no-footnotes-in-code ()
+  "Code like [^Module m] or ^[x] is not a footnote: it isn't raised,
+shrunk or stripped of its brackets.  Footnotes in prose still are."
+  (let ((markdown-hide-markup t))
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "fn")
+       (openclaw--chat-render
+        (list (list :role "assistant"
+                    :content (concat "A note[^1] and `[^x y]` inline.\n\n"
+                                     "```clojure\n(doseq [^Module m (mods model)]\n  ^[x])\n```\n"))))
+       (font-lock-ensure)
+       (cl-flet ((at (s) (goto-char (point-min)) (search-forward s) (- (point) (length s))))
+         (dolist (s '("[^Module" "Module m" "^[x]" "[^x y]" "x y"))
+           (should-not (get-text-property (at s) 'display))
+           (should-not (get-text-property (at s) 'invisible)))
+         (should (get-text-property (at "1]") 'display))))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-tool-summary ()
   (should (equal (openclaw--tool-summary "exec" '(:command "ls -la")) "⚙ Terminal"))
   (should (equal (openclaw--tool-summary "web_search" '(:query "q")) "⚙ Search"))
