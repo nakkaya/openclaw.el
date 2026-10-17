@@ -702,6 +702,24 @@ as the reply is refilled, nor when the stored messages replace it."
      (should (equal (plist-get (openclaw-test--params "chat.history") :cursor) "c9"))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-no-pin-while-mouse-down ()
+  "Pressing on the prompt doesn't scroll it to the bottom until release:
+the release would land on other text and select up to it as a drag."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "pin")
+     (save-window-excursion
+       (set-window-buffer nil (current-buffer))
+       (goto-char (point-max))
+       (let (recentered)
+         (cl-letf (((symbol-function 'recenter) (lambda (&rest _) (setq recentered t))))
+           (let ((last-input-event (list 'down-mouse-1 (posn-at-point))))
+             (openclaw--pin-bottom))
+           (should-not recentered)
+           (let ((last-input-event (list 'mouse-1 (posn-at-point))))
+             (openclaw--pin-bottom))
+           (should recentered))))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-gap-before-prompt ()
   "A blank line separates the transcript from the prompt while streaming too."
   (let ((openclaw-center-messages nil))
@@ -1303,6 +1321,24 @@ expanded, it has the body's, as it then starts the body's first line."
         (should (equal opened "new"))
         (goto-char (point-min))
         (should-error (openclaw-home-visit) :type 'user-error)))
+    (kill-buffer "*openclaw*")))
+
+(ert-deftest openclaw-test-home-click-release-ignored ()
+  "A click opens the session on press, in the same window; its release
+then lands in the chat, and must not select text there as a drag."
+  (let ((openclaw--sessions (list (list :key "s" :displayName "S" :updatedAt 1)))
+        opened)
+    (openclaw--render-home)
+    (with-current-buffer "*openclaw*"
+      (goto-char (point-min))
+      (search-forward "S ")
+      (cl-letf (((symbol-function 'openclaw-chat) (lambda (key) (setq opened key)))
+                ((symbol-function 'mouse-set-point) #'ignore))
+        (openclaw-home-mouse-visit (list 'down-mouse-1 (posn-at-point))))
+      (should (equal opened "s"))
+      (should (eq (lookup-key overriding-terminal-local-map [drag-mouse-1]) 'ignore))
+      (should (eq (lookup-key overriding-terminal-local-map [mouse-1]) 'ignore))
+      (setq overriding-terminal-local-map nil))
     (kill-buffer "*openclaw*")))
 
 (ert-deftest openclaw-test-mode-line-names ()

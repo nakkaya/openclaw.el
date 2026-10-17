@@ -835,7 +835,10 @@ chat (its mode line has the session's model and permission mode)."
   "Open the session clicked in EVENT."
   (interactive "e" openclaw-home-mode)
   (mouse-set-point event)
-  (openclaw-home-visit))
+  (openclaw-home-visit)
+  ;; The chat replaced this view in the window, so the release lands
+  ;; in it, on other text: as a drag it would select up to there.
+  (set-transient-map (define-keymap "<mouse-1>" #'ignore "<drag-mouse-1>" #'ignore)))
 
 ;;;###autoload
 (defun openclaw-home ()
@@ -1345,10 +1348,13 @@ at least the same length, with nothing after it, closes OPEN; e.g.
 
 (defun openclaw--pin-bottom (&optional window)
   "Keep the last line at the bottom of WINDOW, like a terminal.
-Only while point is in the input area, so scrolling back still works."
+Only while point is in the input area, so scrolling back still works.
+Not while a mouse button is down: the text would move under the
+pointer, and the release would select up to it as a drag."
   (let ((w (or window (selected-window))))
     (with-selected-window w
-      (when (and openclaw--input-marker (>= (point) openclaw--input-marker))
+      (when (and openclaw--input-marker (>= (point) openclaw--input-marker)
+                 (not (memq 'down (event-modifiers last-input-event))))
         (save-excursion
           (goto-char (point-max))
           (recenter -1))))))
