@@ -1245,6 +1245,29 @@ only keep text property prefixes."
        (should (stringp (get-text-property (line-beginning-position) 'line-prefix))))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-copy-trims-hidden-markup ()
+  "Copying `code' shown without its backticks leaves out a hidden
+backtick at either end; markup inside the copied text is kept."
+  (let ((markdown-hide-markup t))
+    (openclaw-test--with-gateway
+     (with-current-buffer (openclaw-test--open-chat "cp")
+       (openclaw--chat-render
+        (list (list :role "assistant" :content "Log in as `admin@x.y` / `pa55` now.")))
+       (font-lock-ensure)
+       (goto-char (point-min))
+       (search-forward "`admin")
+       (let ((beg (1- (- (point) (length "admin")))))
+         (search-forward "x.y`")
+         ;; From the hidden opening backtick to past the hidden closing one.
+         (should (equal (filter-buffer-substring beg (point)) "admin@x.y")))
+       (goto-char (point-min))
+       (search-forward "Log")
+       (let ((beg (- (point) 3)))
+         (search-forward "now.")
+         (should (equal (filter-buffer-substring beg (point))
+                        "Log in as `admin@x.y` / `pa55` now."))))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-copy-strips-centering ()
   "Copied text doesn't carry the centering prefix to other buffers."
   (openclaw-test--with-gateway

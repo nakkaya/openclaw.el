@@ -1110,6 +1110,8 @@ Prose is filled to `fill-column'; tables and code extend sideways."
   (add-hook 'after-change-functions #'openclaw--center-input nil t)
   (add-function :filter-return (local 'filter-buffer-substring-function)
                 #'openclaw--strip-centering)
+  (add-function :filter-return (local 'filter-buffer-substring-function)
+                #'openclaw--trim-hidden)
   (add-hook 'yank-transform-functions #'openclaw--fill-yank nil t)
   (add-hook 'completion-at-point-functions #'openclaw--command-capf nil t)
   (add-hook 'window-size-change-functions #'openclaw--pin-bottom nil t)
@@ -1523,6 +1525,19 @@ ones.  Lines are only broken, never joined, and code is left alone."
 Yanked elsewhere, they would still indent it there."
   (remove-list-of-text-properties 0 (length text) '(line-prefix openclaw-width) text)
   text)
+
+(defun openclaw--trim-hidden (text)
+  "Drop hidden markup at the start and end of copied TEXT.
+E.g. `code' is shown without its backticks, and a selection ending
+after it ends past the hidden closing one: Emacs moves point out of
+invisible text.  Markup inside TEXT is kept."
+  (let ((beg 0)
+        (end (length text)))
+    (while (and (< beg end) (invisible-p (get-text-property beg 'invisible text)))
+      (cl-incf beg))
+    (while (and (> end beg) (invisible-p (get-text-property (1- end) 'invisible text)))
+      (cl-decf end))
+    (substring text beg end)))
 
 (defun openclaw--mark-read ()
   "Mark this chat's session read on the gateway, if it is unread."
