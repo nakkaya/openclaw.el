@@ -1093,6 +1093,12 @@ Prose is filled to `fill-column'; tables and code extend sideways."
                             (cons (openclaw--outside-code (car k)) (cdr k))
                           k))
                       markdown-mode-font-lock-keywords))
+  ;; A plain URL doesn't end in emphasis or punctuation, as in GFM:
+  ;; markdown-mode's own pattern would open **https://x.y/a**. with
+  ;; the "**." included.  Used both to highlight and to follow URLs.
+  (setq-local markdown-regex-uri
+              (concat "\\(" (regexp-opt markdown-uri-types)
+                      ":[^]\t\n\r<>; ]*[^]\t\n\r<>; ?!.,:*_~]\\)"))
   (setq-local fill-column openclaw-fill-column)
   ;; Highlight code blocks with their language's major mode.
   (setq-local markdown-fontify-code-blocks-natively t)

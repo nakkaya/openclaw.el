@@ -157,6 +157,25 @@
                    (ensure-list (get-text-property (1- (point)) 'face))))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-plain-url-trailing-markup ()
+  "A plain URL ends before trailing emphasis or punctuation, as in GFM:
+clicking **https://x.y/a**. opens https://x.y/a."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "url")
+     (openclaw--chat-render
+      (list (list :role "assistant"
+                  :content "See **https://x.y/a_(b)/c**. And https://x.y/d?e=f, ok.")))
+     (font-lock-ensure)
+     (cl-flet ((url-at (s) (goto-char (point-min)) (search-forward s)
+                 (nth 3 (markdown-link-at-pos (1- (point))))))
+       (should (equal (url-at "https://x.y/a") "https://x.y/a_(b)/c"))
+       (should (equal (url-at "https://x.y/d") "https://x.y/d?e=f")))
+     (goto-char (point-min))
+     (search-forward "/c")
+     (should (memq 'markdown-plain-url-face (ensure-list (get-text-property (1- (point)) 'face))))
+     (should-not (memq 'markdown-plain-url-face (ensure-list (get-text-property (point) 'face))))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-no-footnotes-in-code ()
   "Code like [^Module m] or ^[x] is not a footnote: it isn't raised,
 shrunk or stripped of its brackets.  Footnotes in prose still are."
