@@ -393,6 +393,16 @@ shrunk or stripped of its brackets.  Footnotes in prose still are."
     (should (equal (buffer-string)
                    "one two three four\nfive six seven eight\n\n# H\n\ntext\n\n```\na  b   c d e f g h i j k l m\n```\n"))))
 
+(ert-deftest openclaw-test-fill-blank-before-list ()
+  "A list right after a paragraph gets a blank line before it, as
+headings do; items of one list, nested ones too, stay together."
+  (with-temp-buffer
+    (setq fill-column 80)
+    (insert "what changes is mostly:\n- orb values\n- caps\n  - nested\n1. one\n\nAlready apart:\n\n- x\n")
+    (openclaw--fill-markdown (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "what changes is mostly:\n\n- orb values\n- caps\n  - nested\n1. one\n\nAlready apart:\n\n- x\n"))))
+
 (ert-deftest openclaw-test-fill-hidden-links ()
   "With link markup and URLs hidden, prose fills to the width shown:
 \"[one source](URL)\" is drawn as \"one source∞\"."
@@ -441,6 +451,7 @@ lines and list items stay apart, and wrapped lines keep the marker."
                            "> that is long enough to wrap.\n"
                            ">\n"
                            "> A list:\n"
+                           ">\n"
                            "> - one\n"
                            "> - two\n"
                            ">\n"

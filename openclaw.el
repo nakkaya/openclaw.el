@@ -1716,16 +1716,21 @@ they extend sideways instead of wrapping."
                       "\n"))))
          (t
           ;; A paragraph or list item runs until a blank, special or
-          ;; new list-item line.
-          (let ((pstart (point)))
+          ;; new list-item line.  A list right after a paragraph gets
+          ;; a blank line before it, for air, as headings do.
+          (let ((pstart (point))
+                (in-list (looking-at item)))
             (forward-line 1)
             (while (and (< (point) end)
                         (not (looking-at skip))
                         (not (looking-at item)))
               (forward-line 1))
-            (let ((pend (min (point) end)))
+            (let ((pend (copy-marker (min (point) end))))
               (fill-region-as-paragraph pstart pend)
-              (goto-char pend)))))))))
+              (goto-char pend)
+              (set-marker pend nil)
+              (when (and (not in-list) (< (point) end) (looking-at item))
+                (insert "\n"))))))))))
 
 ;; Each edit in a large markdown-mode buffer costs time proportional to
 ;; the buffer (markdown-mode re-scans syntax), and filling makes an edit
