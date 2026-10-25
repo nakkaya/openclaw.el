@@ -64,8 +64,10 @@
 ;;
 ;; Messages are centered in the window.  Tables and code wider than
 ;; the text are centered on their own width, or stay flush left when
-;; wider than the window.  A chat shown in several windows at once is
-;; centered for the one used last.
+;; wider than the window.  In a window narrower than
+;; `openclaw-fill-column', the text is refilled to its width.  A chat
+;; shown in several windows at once, e.g. from several emacsclients,
+;; is filled and centered for the narrowest, as tmux does.
 ;;
 ;; Attached files are shown to the agent only in the turn they are
 ;; sent with; later messages see just the 📎 record.  The gateway keeps
@@ -1279,6 +1281,9 @@ Full Access needs the operator.admin scope (see `openclaw-scopes')."
 
 (defun openclaw--set-busy (busy)
   "Mark this chat BUSY or idle."
+  ;; Windows may have changed during the turn.
+  (when (and openclaw--busy (not busy))
+    (openclaw--schedule-reflow))
   (setq openclaw--busy busy)
   (force-mode-line-update))
 
@@ -1460,14 +1465,19 @@ Their arguments (whole scripts, long queries) make poor one-liners.")
                                            fill-column)))
             (setq pos next)))))))
 
-(defun openclaw--center (&optional beg end window)
-  "Center the lines between BEG and END in WINDOW.
-WINDOW defaults to one showing the buffer.  When its width changed
-since the last time, all lines are redone; without BEG, only then."
+(defun openclaw--narrowest-window ()
+  "Return the narrowest window showing this buffer in a visible frame."
+  (let (best)
+    (dolist (w (get-buffer-window-list nil nil 'visible) best)
+      (when (or (not best) (< (window-body-width w) (window-body-width best)))
+        (setq best w)))))
+
+(defun openclaw--center (&optional beg end)
+  "Center the lines between BEG and END in the narrowest window showing them.
+When its width changed since the last time, all lines are redone;
+without BEG, only then."
   (when openclaw-center-messages
-    (if-let* ((w (or window
-                     (and (eq (window-buffer) (current-buffer)) (selected-window))
-                     (get-buffer-window nil t))))
+    (if-let* ((w (openclaw--narrowest-window)))
         (let ((columns (window-body-width w)))
           (cond ((not (eql columns openclaw--center-columns))
                  (setq openclaw--center-columns columns)
@@ -1564,7 +1574,50 @@ Chats not shown are left unread."
 (defun openclaw--center-window (window)
   "Re-center the chat shown in WINDOW, e.g. after a resize."
   (with-current-buffer (window-buffer window)
-    (openclaw--center nil nil window)))
+    (openclaw--center)))
+
+;;;;; Reflow: like tmux's `window-size smallest', a chat is filled to the
+;; narrowest window showing it in a visible frame, at most
+;; `openclaw-fill-column'.  Text is filled with real newlines, so the
+;; transcript is reloaded when that width changes.
+
+(defvar openclaw--reflow-timer nil
+  "Timer refilling the chats once windows stop changing.")
+
+(defun openclaw--chat-width ()
+  "Return the column to fill this chat at, or nil if it isn't shown."
+  (when-let* ((w (openclaw--narrowest-window)))
+    ;; One column short: a terminal shows a full line as continued.
+    (min openclaw-fill-column (1- (window-body-width w)))))
+
+(defun openclaw--schedule-reflow (&rest _)
+  "Refill the chats in a moment, once windows stop changing size."
+  (when openclaw--reflow-timer
+    (cancel-timer openclaw--reflow-timer))
+  (setq openclaw--reflow-timer (run-with-timer 0.3 nil #'openclaw--reflow)))
+
+(defun openclaw--reflow ()
+  "Refill and reload the chats whose width changed.
+A chat waits for its running turn to end.  The draft's long lines are
+broken as typing would, with `auto-fill-mode' on."
+  (setq openclaw--reflow-timer nil)
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when-let* (((derived-mode-p 'openclaw-chat-mode))
+                  ((not openclaw--busy))
+                  (width (openclaw--chat-width))
+                  ((/= width fill-column)))
+        (setq fill-column width)
+        (save-excursion
+          (goto-char openclaw--input-marker)
+          (let ((draft (openclaw--fill-yank
+                        (buffer-substring-no-properties (point) (point-max)))))
+            (replace-region-contents (point) (point-max) (lambda () draft))))
+        (openclaw-chat-reload)))))
+
+(add-hook 'window-size-change-functions #'openclaw--schedule-reflow)
+(add-hook 'window-buffer-change-functions #'openclaw--schedule-reflow)
+(add-hook 'delete-frame-functions #'openclaw--schedule-reflow)
 
 (defun openclaw--wide-blocks ()
   "List (BEG END WIDTH) for the blocks wider than `fill-column'.

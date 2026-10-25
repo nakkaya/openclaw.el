@@ -85,6 +85,10 @@ centered in the window.
 | =openclaw-agent-name=      | the agent's name         |
 | =openclaw-user-name=       | the gateway owner's name |
 
+Chats narrower than =openclaw-fill-column= are refilled to the window.
+A chat shown in several windows (or emacsclients) follows the
+narrowest, as tmux does.
+
 * Tests
 
 #+begin_src sh

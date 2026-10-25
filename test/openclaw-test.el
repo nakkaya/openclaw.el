@@ -1245,6 +1245,100 @@ only keep text property prefixes."
        (should (stringp (get-text-property (line-beginning-position) 'line-prefix))))))
   (openclaw-test--kill-chats))
 
+(defun openclaw-test--long-messages ()
+  "Two messages with lines longer than any window here."
+  (list (list :role "user" :content (string-trim (apply #'concat (make-list 20 "short words "))))
+        (list :role "assistant" :content (string-trim (apply #'concat (make-list 20 "more words "))))))
+
+(ert-deftest openclaw-test-reflow-narrowest-window ()
+  "Like tmux, a chat is filled to the narrowest window showing it, at
+most `openclaw-fill-column', and widens again when that window goes."
+  (let ((openclaw-fill-column 60))
+    (openclaw-test--with-gateway
+     (let ((buf (openclaw-test--open-chat "rf" (openclaw-test--long-messages))))
+       (save-window-excursion
+         (delete-other-windows)
+         (switch-to-buffer buf)
+         (openclaw--reflow)
+         (should (= fill-column 60))    ; an 80 column window
+         (should-not (openclaw-test--request "chat.history"))
+         (let ((w (split-window-right))) ; 39 and 40 columns
+           (set-window-buffer w buf)
+           (openclaw--reflow)
+           (should (= fill-column 38))
+           (openclaw-test--reply "chat.history" (list :messages (openclaw-test--long-messages)))
+           (goto-char (point-min))
+           (search-forward "short words")
+           (should (<= (- (line-end-position) (line-beginning-position)) 38))
+           ;; Centered for the narrowest window: flush left.
+           (should (equal (get-text-property (point) 'line-prefix) ""))
+           (delete-window w))
+         (openclaw--reflow)
+         (should (= fill-column 60))
+         (openclaw-test--reply "chat.history" (list :messages (openclaw-test--long-messages)))
+         (goto-char (point-min))
+         (search-forward "short words")
+         (should (> (- (line-end-position) (line-beginning-position)) 38))))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-reflow-waits-for-turn ()
+  "A chat narrowed while a reply streams is refilled once the turn ends."
+  (let ((openclaw-fill-column 60))
+    (openclaw-test--with-gateway
+     (let ((buf (openclaw-test--open-chat "rw")))
+       (save-window-excursion
+         (delete-other-windows)
+         (switch-to-buffer buf)
+         (set-window-buffer (split-window-right) buf)
+         (let (timers)
+           (cl-letf (((symbol-function 'run-with-timer)
+                      (lambda (_secs _repeat fn &rest _) (push fn timers) nil)))
+             (openclaw--set-busy t)
+             (openclaw--reflow)
+             (should (= fill-column 60))
+             (should-not (openclaw-test--request "chat.history"))
+             (openclaw--set-busy nil)
+             (should (= (length timers) 1))
+             (funcall (car timers))
+             (should (= fill-column 38))
+             (should (openclaw-test--request "chat.history"))))))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-reflow-draft ()
+  "With auto-fill, a draft typed while the chat was wide is broken at the
+new width too; its own line breaks stay."
+  (let ((openclaw-fill-column 60))
+    (openclaw-test--with-gateway
+     (let ((buf (openclaw-test--open-chat "rd")))
+       (save-window-excursion
+         (delete-other-windows)
+         (switch-to-buffer buf)
+         (auto-fill-mode 1)
+         (goto-char (point-max))
+         (insert "first line\n"
+                 (string-trim (apply #'concat (make-list 10 "draft words "))))
+         (set-window-buffer (split-window-right) buf)
+         (openclaw--reflow)
+         (should (equal (buffer-substring-no-properties openclaw--input-marker (point-max))
+                        (concat "first line\n"
+                                "draft words draft words draft words\n"
+                                "draft words draft words draft words\n"
+                                "draft words draft words draft words\n"
+                                "draft words")))))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-reflow-on-window-changes ()
+  "Resizing, showing a chat elsewhere or closing a frame checks the
+widths again, once windows settle."
+  (dolist (hook '(window-size-change-functions window-buffer-change-functions
+                  delete-frame-functions))
+    (should (memq #'openclaw--schedule-reflow (default-value hook))))
+  (let (timers)
+    (cl-letf (((symbol-function 'run-with-timer)
+               (lambda (secs _repeat fn &rest _) (push (cons secs fn) timers) nil)))
+      (openclaw--schedule-reflow (selected-frame))
+      (should (equal timers '((0.3 . openclaw--reflow)))))))
+
 (ert-deftest openclaw-test-copy-trims-hidden-markup ()
   "Copying `code' shown without its backticks leaves out a hidden
 backtick at either end; markup inside the copied text is kept."
@@ -1274,7 +1368,7 @@ backtick at either end; markup inside the copied text is kept."
    (with-current-buffer (openclaw-test--open-chat "y1")
      (let ((openclaw-center-messages t))
        (set-window-buffer (selected-window) (current-buffer))
-       (openclaw--center (point-min) (point-max) (selected-window))
+       (openclaw--center (point-min) (point-max))
        (goto-char (point-min))
        (search-forward "message number 5 ")
        (should (get-text-property (point) 'line-prefix))
