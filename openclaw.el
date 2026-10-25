@@ -1049,6 +1049,7 @@ stored messages when the run ends.")
   ;; markdown-mode remaps C-a to its own command, which ignores fields
   ;; and would move into the prompt; override that remap.
   "<remap> <move-beginning-of-line>" #'openclaw-chat-beginning-of-line
+  "DEL" #'openclaw-chat-delete-backward
   "C-c C-g" #'openclaw-chat-reload
   "C-<up>" #'openclaw-chat-previous-message
   "C-<down>" #'openclaw-chat-next-message
@@ -2585,6 +2586,15 @@ With prefix argument REMOVE, remove a staged attachment instead."
   "Move to the beginning of line N, stopping after the prompt (eshell-style)."
   (interactive "^p" openclaw-chat-mode)
   (move-beginning-of-line n))
+
+(defun openclaw-chat-delete-backward (arg)
+  "Delete ARG characters back, or outdent as `markdown-outdent-or-delete'.
+Only lines starting in the input outdent: on its first line that
+command takes the prompt for indentation and moves into it."
+  (interactive "*p" openclaw-chat-mode)
+  (if (< (pos-bol) openclaw--input-marker)
+      (backward-delete-char-untabify arg)
+    (markdown-outdent-or-delete arg)))
 
 (defun openclaw-chat-return ()
   "Send the input when in the input area, otherwise jump to it.

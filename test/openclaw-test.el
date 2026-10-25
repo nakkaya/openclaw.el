@@ -1327,6 +1327,30 @@ new width too; its own line breaks stay."
                                 "draft words")))))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-backspace-at-prompt ()
+  "DEL at the start of the input stays there: markdown-mode's DEL takes
+the prompt for indentation and moves to the line start to outdent it."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "bs" (openclaw-test--messages 2))
+     (goto-char (point-max))
+     (insert "ab")
+     (dotimes (_ 3)
+       (ignore-errors (call-interactively (key-binding (kbd "DEL")))))
+     (should (= (point) openclaw--input-marker (point-max)))
+     (cl-flet ((del-before (text pos)
+                 (delete-region openclaw--input-marker (point-max))
+                 (goto-char (point-max))
+                 (insert text)
+                 (goto-char (+ openclaw--input-marker pos))
+                 (call-interactively (key-binding (kbd "DEL")))
+                 (buffer-substring-no-properties openclaw--input-marker (point-max))))
+       ;; Elsewhere it still deletes, spaces after the prompt too.
+       (should (equal (del-before "ab" 2) "a"))
+       (should (equal (del-before "    x" 4) "   x"))
+       ;; Later lines still outdent as in markdown-mode.
+       (should (equal (del-before "- a\n    - b" 8) "- a\n- b")))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-reflow-on-window-changes ()
   "Resizing, showing a chat elsewhere or closing a frame checks the
 widths again, once windows settle."
