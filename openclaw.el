@@ -2031,7 +2031,14 @@ their start and point when those are in it; this keeps you reading."
                          (openclaw--line-col (window-point w)))))
 
 (defun openclaw--restore-views (views)
-  "Put the windows in VIEWS, from `openclaw--scrolled-views', back in place."
+  "Put the windows in VIEWS, from `openclaw--scrolled-views', back in place.
+The other windows showing the chat were at the end and follow it, with
+the prompt on their last line."
+  (dolist (w (get-buffer-window-list nil nil t))
+    (unless (assq w views)
+      (with-selected-window w
+        (goto-char (point-max))
+        (recenter -1))))
   (pcase-dolist (`(,w ,start ,pt) views)
     (set-window-start w (openclaw--line-col-pos start) t)
     (set-window-point w (openclaw--line-col-pos pt))))
@@ -2071,9 +2078,7 @@ Windows scrolled back into the transcript keep their place."
     ;; The overlays are gone, the streamed thinking block's included.
     (setq openclaw--live-stream nil
           openclaw--live-fold nil)
-    (if at-end
-        (openclaw--goto-end)
-      (goto-char (openclaw--line-col-pos here)))
+    (goto-char (if at-end (point-max) (openclaw--line-col-pos here)))
     (when mark-at
       (set-marker (mark-marker)
                   (if (integerp mark-at)
@@ -2156,8 +2161,8 @@ formatted; without a usable cursor, reload the whole transcript."
           openclaw--live-stream nil
           openclaw--live-fold nil)
     (openclaw--update-gap)
-    (openclaw--restore-views views)
-    (when at-end (openclaw--goto-end))))
+    (when at-end (goto-char (point-max)))
+    (openclaw--restore-views views)))
 
 (defun openclaw--chat-live (stream fn)
   "Call FN at the end of the transcript to insert streamed output.
@@ -2188,8 +2193,8 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
         (add-text-properties start (point) '(read-only t front-sticky t rear-nonsticky t))
         (openclaw--center start (point))))
     (openclaw--update-gap)
-    (openclaw--restore-views views)
-    (when at-end (openclaw--goto-end))))
+    (when at-end (goto-char (point-max)))
+    (openclaw--restore-views views)))
 
 (defun openclaw--update-gap ()
   "Keep a blank line between the transcript and the prompt.

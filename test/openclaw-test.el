@@ -581,6 +581,46 @@ it becomes once aligned flush left, with its markup hidden."
      (should (string-match-p "openclaw\n\nHello\n" (buffer-string)))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-split-reading-and-typing ()
+  "With the chat in two windows, one reading back and one at the prompt,
+a reply keeps the first in place and the second at the end, whichever
+is selected."
+  (dolist (select-reader '(nil t))
+    (openclaw-test--with-gateway
+     (save-window-excursion
+       (delete-other-windows)
+       (switch-to-buffer (openclaw-test--open-chat "sp"))
+       (setq openclaw--history-cursor "c1")
+       (let* ((typer (selected-window))
+              (reader (split-window-below))
+              (reading (progn (goto-char (point-min))
+                              (search-forward "message number 5 ")
+                              (line-beginning-position)))
+              (check (lambda (what)
+                       (ert-info (what)
+                         (should (string-prefix-p
+                                  "message number 5 "
+                                  (with-selected-window reader
+                                    (buffer-substring-no-properties (window-start) (pos-eol)))))
+                         (should (= (window-point typer) (point-max)))))))
+         (set-window-buffer reader (current-buffer))
+         (set-window-start reader reading)
+         (set-window-point reader reading)
+         (set-window-point typer (point-max))
+         (select-window (if select-reader reader typer))
+         (openclaw--chat-on-event "agent" '(:sessionKey "sp" :stream "lifecycle" :data (:phase "start")))
+         (openclaw--chat-on-event "agent" '(:sessionKey "sp" :stream "assistant" :data (:delta "A reply.")))
+         (funcall check "streaming")
+         (openclaw--chat-on-event "agent" '(:sessionKey "sp" :stream "lifecycle" :data (:phase "end")))
+         (openclaw-test--reply "chat.history"
+                               '(:kind "delta" :deltaCursor "c2"
+                                 :messages ((:message (:role "assistant" :content "A reply.")))))
+         (funcall check "stored reply")
+         (openclaw-chat-reload)
+         (openclaw-test--reply "chat.history" (list :messages (openclaw-test--messages 62)))
+         (funcall check "reload")))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-stream-keeps-reading-place ()
   "Reading back inside the reply being streamed, the window doesn't jump
 as the reply is refilled, nor when the stored messages replace it."
