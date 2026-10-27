@@ -142,6 +142,8 @@ effect for newly opened chat buffers."
 (defvar openclaw--next-id 0)
 (defvar openclaw--pending (make-hash-table :test #'equal)
   "Request id -> callback taking (OK PAYLOAD-OR-ERROR).")
+(defvar-local openclaw--unsent nil
+  "Chat sends lost with the connection, as (PARAMS TEXT ATTACHMENTS).")
 (defvar openclaw--hello nil
   "Payload of the last hello-ok.")
 (defvar openclaw--on-hello nil
@@ -384,7 +386,7 @@ So that, e.g., a send lost with the connection reports it failed."
     (clrhash openclaw--pending)
     (dolist (cb callbacks)
       (with-demoted-errors "OpenClaw: %S"
-        (funcall cb nil '(:message "connection lost"))))))
+        (funcall cb nil '(:code "CONNECTION_LOST" :message "connection lost"))))))
 
 (defun openclaw--drop-connection (&optional reason)
   "Close a connection that stopped responding; it reconnects on close.
@@ -432,6 +434,9 @@ open chats."
   "Restore subscriptions and views after (re)connecting."
   (setq openclaw--reconnect-delay 1)
   (openclaw-request "sessions.subscribe" nil)
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when openclaw--unsent (openclaw--resend-unsent))))
   (openclaw-request "models.list" nil
                     (lambda (ok res)
                       (when ok
@@ -2496,6 +2501,54 @@ With prefix argument REMOVE, remove a staged attachment instead."
                                 :mime mime :size size))))))
   (openclaw--show-attachments))
 
+(defun openclaw--send (params text attachments)
+  "Send `chat.send' PARAMS for TEXT with ATTACHMENTS from this chat.
+A gateway error puts TEXT and ATTACHMENTS back in the input.  A send
+lost with the connection may still have arrived (a stalled gateway
+answers late), so it is resent on reconnect instead: the gateway
+dedupes it by its idempotency key."
+  (let* ((buf (current-buffer))
+         (ws openclaw--ws)
+         (id (openclaw-request
+              "chat.send" params
+              (lambda (ok res)
+                (cond
+                 (ok)
+                 ((equal (plist-get res :code) "CONNECTION_LOST")
+                  (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (push (list params text attachments) openclaw--unsent))))
+                 (t
+                  (message "OpenClaw send failed: %s" (plist-get res :message))
+                  (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (openclaw--set-busy nil)
+                      ;; Put the text and files back to send again
+                      ;; (unless something new was added meanwhile).
+                      (when (= openclaw--input-marker (point-max))
+                        (save-excursion
+                          (goto-char (point-max))
+                          (insert text)))
+                      (unless openclaw--attachments
+                        (setq openclaw--attachments attachments)
+                        (openclaw--show-attachments))
+                      ;; Reconnecting reloads the transcript anyway.
+                      (when (openclaw-connected-p)
+                        (openclaw-chat-reload))))))))))
+    ;; The gateway answers at once; no answer means the connection
+    ;; died unnoticed, so reconnect now (which fails the send).
+    (run-with-timer 15 nil (lambda ()
+                             (when (and (eq ws openclaw--ws)
+                                        (gethash id openclaw--pending))
+                               (openclaw--drop-connection))))))
+
+(defun openclaw--resend-unsent ()
+  "Send again the sends this chat lost with the connection, in order."
+  (let ((unsent (reverse openclaw--unsent)))
+    (setq openclaw--unsent nil)
+    (pcase-dolist (`(,params ,text ,attachments) unsent)
+      (openclaw--send params text attachments))))
+
 (defun openclaw-chat-send ()
   "Send the input area to the session."
   (interactive nil openclaw-chat-mode)
@@ -2504,39 +2557,13 @@ With prefix argument REMOVE, remove a staged attachment instead."
     (when (string-empty-p text)
       (user-error (if attachments "Write a message to go with the attachment"
                     "Nothing to send")))
-    (let* ((buf (current-buffer))
-           (ws openclaw--ws)
-           (id (openclaw-request
-                "chat.send"
-                `(:sessionKey ,openclaw--session-key :message ,text
-                  ,@(and attachments
-                         (list :attachments
-                               (vconcat (mapcar #'openclaw--attachment-payload attachments))))
-                  :idempotencyKey ,(format "emacs-%s" (md5 (format "%s%s" text (float-time)))))
-                (lambda (ok res)
-                  (unless ok
-                    (message "OpenClaw send failed: %s" (plist-get res :message))
-                    (when (buffer-live-p buf)
-                      (with-current-buffer buf
-                        (openclaw--set-busy nil)
-                        ;; Put the text and files back to send again
-                        ;; (unless something new was added meanwhile).
-                        (when (= openclaw--input-marker (point-max))
-                          (save-excursion
-                            (goto-char (point-max))
-                            (insert text)))
-                        (unless openclaw--attachments
-                          (setq openclaw--attachments attachments)
-                          (openclaw--show-attachments))
-                        ;; Reconnecting reloads the transcript anyway.
-                        (when (openclaw-connected-p)
-                          (openclaw-chat-reload)))))))))
-      ;; The gateway answers at once; no answer means the connection
-      ;; died unnoticed, so reconnect now (which fails the send).
-      (run-with-timer 15 nil (lambda ()
-                               (when (and (eq ws openclaw--ws)
-                                          (gethash id openclaw--pending))
-                                 (openclaw--drop-connection)))))
+    (openclaw--send
+     `(:sessionKey ,openclaw--session-key :message ,text
+       ,@(and attachments
+              (list :attachments
+                    (vconcat (mapcar #'openclaw--attachment-payload attachments))))
+       :idempotencyKey ,(format "emacs-%s" (md5 (format "%s%s" text (float-time)))))
+     text attachments)
     ;; Show busy right away, as the run's start event may take a moment.
     ;; Only once sent: a refused send (not connected) leaves no busy
     ;; state.  The failure callback above always runs later.

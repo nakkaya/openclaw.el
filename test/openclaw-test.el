@@ -891,15 +891,44 @@ it into the input still works, and the result can be edited."
          ;; Answered: nothing happens.
          (funcall timer-fn)
          (should (= dropped 1)))
-       ;; The drop fails the request: the text comes back, and there is
-       ;; no reload while disconnected.
+       ;; A gateway error puts the text back, and there is no reload
+       ;; while disconnected.
        (let ((cb (nth 2 (openclaw-test--request "chat.send")))
              (openclaw-test--connected nil))
          (setq openclaw-test--requests nil)
-         (funcall cb nil '(:message "connection lost"))
+         (funcall cb nil '(:code "INVALID_REQUEST" :message "nope"))
          (should-not openclaw--busy)
          (should (string-suffix-p "important question" (buffer-string)))
          (should-not openclaw-test--requests)))))
+  (openclaw-test--kill-chats))
+
+(ert-deftest openclaw-test-send-resent-after-reconnect ()
+  "A send lost with the connection may still have arrived (a stalled
+gateway answers late), so it isn't put back to send again: it is resent
+on reconnect with the same idempotency key, which the gateway dedupes."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "rs")
+     (insert "queued question")
+     (cl-letf (((symbol-function 'run-with-timer) #'ignore))
+       (openclaw-chat-send)
+       (let ((params (openclaw-test--params "chat.send")))
+         (let ((openclaw--pending (make-hash-table :test #'equal))
+               (openclaw--ws 'fake))
+           (puthash "1" (nth 2 (openclaw-test--request "chat.send")) openclaw--pending)
+           (setq openclaw-test--requests nil)
+           (cl-letf (((symbol-function 'openclaw--schedule-reconnect) #'ignore))
+             (let ((openclaw-test--connected nil))
+               (openclaw--on-close 'fake))))
+         (should (= openclaw--input-marker (point-max)))
+         (should (string-match-p "queued question" (buffer-string)))
+         (should-not (openclaw-test--request "chat.send"))
+         (openclaw--resume)
+         (should (equal (openclaw-test--params "chat.send") params))
+         ;; Sent once only.
+         (openclaw-test--reply "chat.send" '(:runId "x" :status "in_flight"))
+         (setq openclaw-test--requests nil)
+         (openclaw--resume)
+         (should-not (openclaw-test--request "chat.send"))))))
   (openclaw-test--kill-chats))
 
 (ert-deftest openclaw-test-abort-messages ()
@@ -1129,7 +1158,7 @@ instead of leaving the cut messages on screen."
          (should (string-match-p "You\n\nWhat is the secret word\\?\n\n📎 secret.txt (28 B)\n📎 pic.png (11 B)\n"
                                  (buffer-string)))
          ;; A failed send puts the text and files back.
-         (funcall (nth 2 (openclaw-test--request "chat.send")) nil '(:message "connection lost"))
+         (funcall (nth 2 (openclaw-test--request "chat.send")) nil '(:code "INVALID_REQUEST" :message "too big"))
          (should (= 2 (length openclaw--attachments)))
          (should (string-suffix-p "What is the secret word?" (buffer-string)))
          ;; In history, the stored record shows as 📎 lines.
