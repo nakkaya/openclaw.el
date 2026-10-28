@@ -1897,12 +1897,11 @@ markup and URLs, so line and table widths match what the chat shows."
         (put-text-property start (point) 'openclaw-entry id)))))
 
 (defun openclaw--goto-end ()
-  "Move point to the end, with the prompt on the last line of each window."
+  "Move point to the end, with the prompt on the window's last line.
+Other windows showing the chat keep their place."
   (goto-char (point-max))
-  (dolist (w (get-buffer-window-list nil nil t))
-    (with-selected-window w
-      (goto-char (point-max))
-      (recenter -1))))
+  (when (eq (window-buffer) (current-buffer))
+    (recenter -1)))
 
 (defun openclaw--table-cells (beg end)
   "Cells of the table row BEG..END as trimmed strings with properties.

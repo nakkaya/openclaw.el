@@ -621,6 +621,33 @@ is selected."
          (funcall check "reload")))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-open-in-second-window ()
+  "Opening a chat already shown elsewhere, or jumping to its input, moves
+only the selected window to the end."
+  (openclaw-test--with-gateway
+   (save-window-excursion
+     (delete-other-windows)
+     (switch-to-buffer (openclaw-test--open-chat "ow"))
+     (let* ((reader (selected-window))
+            (other (split-window-below))
+            (reading (progn (goto-char (point-min))
+                            (search-forward "message number 5 ")
+                            (line-beginning-position))))
+       (set-window-start reader reading)
+       (set-window-point reader reading)
+       (select-window other)
+       (switch-to-buffer "*scratch*")
+       (openclaw-chat "ow")
+       (should (= (window-point other) (point-max)))
+       (should (= (window-start reader) reading))
+       (should (= (window-point reader) reading))
+       (goto-char (point-min))
+       (openclaw-chat-return)
+       (should (= (window-point other) (point-max)))
+       (should (= (window-start reader) reading))
+       (should (= (window-point reader) reading)))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-stream-keeps-reading-place ()
   "Reading back inside the reply being streamed, the window doesn't jump
 as the reply is refilled, nor when the stored messages replace it."
