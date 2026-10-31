@@ -586,7 +586,12 @@ Each level of DEPTH indents by two columns."
          (children (make-hash-table :test #'equal))
          roots)
     (dolist (s visible)
-      (let ((parent (plist-get s :parentSessionKey)))
+      ;; Only forks nest: the gateway sets a parent on other sessions
+      ;; too, e.g. those created from the main one, which have groups
+      ;; of their own.  A fork is what its `sessionEntryForkedFromParent'
+      ;; says.
+      (let ((parent (and (or (plist-get s :forkSource) (eq (plist-get s :forkedFromParent) t))
+                         (plist-get s :parentSessionKey))))
         (if (and parent (member parent keys))
             (push s (gethash parent children))
           (push s roots))))

@@ -1532,16 +1532,24 @@ expanded, it has the body's, as it then starts the body's first line."
 (ert-deftest openclaw-test-sidebar-render ()
   (let ((openclaw--groups (list (list :name "Work")))
         (openclaw--sessions (list (list :key "a" :displayName "Alpha" :category "Work")
-                                  (list :key "b" :displayName "Beta" :parentSessionKey "a")
+                                  (list :key "b" :displayName "Beta" :parentSessionKey "a"
+                                        :forkedFromParent t)
                                   (list :key "c" :displayName "Gamma" :status "failed")
-                                  (list :key "d" :displayName "Delta" :unread t))))
+                                  (list :key "d" :displayName "Delta" :unread t)
+                                  (list :key "e" :displayName "Epsilon" :category "Home"
+                                        :parentSessionKey "a")
+                                  (list :key "f" :displayName "Zeta" :parentSessionKey "a"
+                                        :forkSource '(:sessionKey "a")))))
+    (push (list :name "Home") openclaw--groups)
     (get-buffer-create "*openclaw-sessions*")
     (openclaw--render-sidebar)
     (with-current-buffer "*openclaw-sessions*"
       (should (string-match-p "Work" (buffer-string)))
       (should (string-match-p "× Gamma" (buffer-string)))
-      ;; Children (e.g. forks) sit indented under their parent.
-      (should (string-match-p "^  Alpha\n    Beta$" (buffer-string)))
+      ;; Forks sit indented under their parent.
+      (should (string-match-p "^  Alpha\n    Beta\n    Zeta$" (buffer-string)))
+      ;; Other sessions with a parent stay in their own group.
+      (should (string-match-p "^Home\n  Epsilon$" (buffer-string)))
       (goto-char (point-min))
       (search-forward "Delta")
       (should (eq (get-text-property (1- (point)) 'font-lock-face) 'font-lock-builtin-face))))
