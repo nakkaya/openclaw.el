@@ -2025,42 +2025,49 @@ widths (slow: markdown-mode's emphasis matching is costly)."
     (move-to-column (cdr line-col))
     (point)))
 
-(defun openclaw--scrolled-views ()
-  "Windows scrolled back into this chat: (WINDOW START POINT) by line/column.
-Rewriting text (a reply refilled as it streams, a re-render) moves
-their start and point when those are in it; this keeps you reading."
+(defun openclaw--views ()
+  "Where the windows showing this chat are: (WINDOW START POINT).
+Scrolled back into the transcript, START and POINT are line/column:
+rewriting text (a reply refilled as it streams, a re-render) moves
+them when they are in it; this keeps you reading.  In the input,
+START is nil and POINT the offset into it, kept while you edit."
   (cl-loop for w in (get-buffer-window-list nil nil t)
-           unless (>= (window-point w) openclaw--input-marker)
-           collect (list w (openclaw--line-col (window-start w))
-                         (openclaw--line-col (window-point w)))))
+           for pt = (window-point w)
+           collect (if (>= pt openclaw--input-marker)
+                       (list w nil (- pt openclaw--input-marker))
+                     (list w (openclaw--line-col (window-start w))
+                           (openclaw--line-col pt)))))
 
 (defun openclaw--restore-views (views)
-  "Put the windows in VIEWS, from `openclaw--scrolled-views', back in place.
-The other windows showing the chat were at the end and follow it, with
-the prompt on their last line."
-  (dolist (w (get-buffer-window-list nil nil t))
-    (unless (assq w views)
-      (with-selected-window w
-        (goto-char (point-max))
-        (recenter -1))))
+  "Put the windows in VIEWS, from `openclaw--views', back in place.
+Those in the input follow the end, with the prompt on their last line."
   (pcase-dolist (`(,w ,start ,pt) views)
-    (set-window-start w (openclaw--line-col-pos start) t)
-    (set-window-point w (openclaw--line-col-pos pt))))
+    (if start
+        (progn
+          (set-window-start w (openclaw--line-col-pos start) t)
+          (set-window-point w (openclaw--line-col-pos pt)))
+      (set-window-point w (min (point-max) (+ openclaw--input-marker pt)))
+      (with-selected-window w
+        (save-excursion
+          (goto-char (point-max))
+          (recenter -1))))))
 
 (defun openclaw--chat-render (messages)
   "Replace the transcript with MESSAGES, keeping pending input.
 Windows scrolled back into the transcript keep their place."
   (let* ((inhibit-read-only t)
          (input (buffer-substring-no-properties openclaw--input-marker (point-max)))
-         (at-end (>= (point) openclaw--input-marker))
-         (here (openclaw--line-col (point)))
+         (in-input (>= (point) openclaw--input-marker))
+         (here (if in-input
+                   (- (point) openclaw--input-marker)
+                 (openclaw--line-col (point))))
          ;; Erasing would move the mark to the top, so a later region
          ;; (e.g. shift-click) would span the whole transcript.
          (mark-at (when-let* ((m (mark t)))
                     (if (>= m openclaw--input-marker)
                         (- m openclaw--input-marker)
                       (openclaw--line-col m))))
-         (views (openclaw--scrolled-views)))
+         (views (openclaw--views)))
     ;; Only our overlays: others belong to other modes (e.g. hl-line).
     (remove-overlays (point-min) (point-max) 'openclaw t)
     (erase-buffer)
@@ -2082,7 +2089,9 @@ Windows scrolled back into the transcript keep their place."
     ;; The overlays are gone, the streamed thinking block's included.
     (setq openclaw--live-stream nil
           openclaw--live-fold nil)
-    (goto-char (if at-end (point-max) (openclaw--line-col-pos here)))
+    (goto-char (if in-input
+                   (min (point-max) (+ openclaw--input-marker here))
+                 (openclaw--line-col-pos here)))
     (when mark-at
       (set-marker (mark-marker)
                   (if (integerp mark-at)
@@ -2147,9 +2156,8 @@ formatted; without a usable cursor, reload the whole transcript."
 (defun openclaw--chat-replace-turn (messages)
   "Replace the current turn's draft with MESSAGES, the stored version."
   (let ((inhibit-read-only t)
-        (at-end (>= (point) openclaw--input-marker))
         (beg (or openclaw--turn-start openclaw--live-marker))
-        (views (openclaw--scrolled-views)))
+        (views (openclaw--views)))
     (save-excursion
       (remove-overlays beg openclaw--live-marker 'openclaw t)
       (delete-region beg openclaw--live-marker)
@@ -2165,15 +2173,13 @@ formatted; without a usable cursor, reload the whole transcript."
           openclaw--live-stream nil
           openclaw--live-fold nil)
     (openclaw--update-gap)
-    (when at-end (goto-char (point-max)))
     (openclaw--restore-views views)))
 
 (defun openclaw--chat-live (stream fn)
   "Call FN at the end of the transcript to insert streamed output.
 FN gets non-nil when STREAM differs from the previous one (a new block)."
   (let ((inhibit-read-only t)
-        (at-end (>= (point) openclaw--input-marker))
-        (views (openclaw--scrolled-views)))
+        (views (openclaw--views)))
     (save-excursion
       (goto-char openclaw--live-marker)
       (let ((start (point))
@@ -2197,7 +2203,6 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
         (add-text-properties start (point) '(read-only t front-sticky t rear-nonsticky t))
         (openclaw--center start (point))))
     (openclaw--update-gap)
-    (when at-end (goto-char (point-max)))
     (openclaw--restore-views views)))
 
 (defun openclaw--update-gap ()

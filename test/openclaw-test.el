@@ -621,6 +621,44 @@ is selected."
          (funcall check "reload")))))
   (openclaw-test--kill-chats))
 
+(ert-deftest openclaw-test-editing-draft-while-streaming ()
+  "Editing inside the draft while a reply streams or the transcript is
+reloaded, point stays where it is, in every window."
+  (openclaw-test--with-gateway
+   (save-window-excursion
+     (delete-other-windows)
+     (switch-to-buffer (openclaw-test--open-chat "ed"))
+     (setq openclaw--history-cursor "c1")
+     (let ((other (split-window-below))
+           (draft "fix the tpyo here"))
+       (goto-char (point-max))
+       (insert draft)
+       (search-backward "tpyo")
+       (set-window-point other (+ openclaw--input-marker 4))
+       (let ((offset (- (point) openclaw--input-marker))
+             (check (lambda (what)
+                      (ert-info (what)
+                        (should (equal (buffer-substring-no-properties
+                                        openclaw--input-marker (point-max))
+                                       draft))
+                        (should (= (- (point) openclaw--input-marker) 8))
+                        (should (= (- (window-point other) openclaw--input-marker) 4))))))
+         (should (= offset 8))
+         (openclaw--chat-on-event "agent" '(:sessionKey "ed" :stream "lifecycle" :data (:phase "start")))
+         (openclaw--chat-on-event "agent" '(:sessionKey "ed" :stream "thinking" :data (:delta "Hmm.")))
+         (funcall check "thinking")
+         (openclaw--chat-on-event "agent" '(:sessionKey "ed" :stream "assistant" :data (:delta "A reply.")))
+         (funcall check "reply")
+         (openclaw--chat-on-event "agent" '(:sessionKey "ed" :stream "lifecycle" :data (:phase "end")))
+         (openclaw-test--reply "chat.history"
+                               '(:kind "delta" :deltaCursor "c2"
+                                 :messages ((:message (:role "assistant" :content "A reply.")))))
+         (funcall check "stored reply")
+         (openclaw-chat-reload)
+         (openclaw-test--reply "chat.history" (list :messages (openclaw-test--messages 62)))
+         (funcall check "reload")))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-open-in-second-window ()
   "Opening a chat already shown elsewhere, or jumping to its input, moves
 only the selected window to the end."
