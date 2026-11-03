@@ -1774,6 +1774,48 @@ then lands in the chat, and must not select text there as a drag."
     (when (consp matches) (setcdr (last matches) nil))
     (should (equal matches '("Review")))))
 
+(ert-deftest openclaw-test-sidebar-archived ()
+  "A shows archived sessions greyed in their groups, and hides them
+again; opening one restores it.  Elsewhere they stay hidden."
+  (openclaw-test--with-gateway
+   (let ((openclaw--show-archived nil)
+         (openclaw--groups (list (list :name "Work")))
+         (openclaw--sessions (list (list :key "a" :displayName "Alpha" :category "Work")
+                                   (list :key "o" :displayName "Old" :category "Work"
+                                         :archived t :sessionId "s-o"))))
+     (get-buffer-create "*openclaw-sessions*")
+     (openclaw--render-sidebar)
+     (with-current-buffer "*openclaw-sessions*"
+       (should (eq (key-binding (kbd "A")) 'openclaw-sessions-toggle-archived))
+       (should-not (string-match-p "Old" (buffer-string)))
+       (openclaw-sessions-toggle-archived)
+       (openclaw-test--reply "sessions.groups.list" (list :groups openclaw--groups))
+       (should (equal (openclaw-test--params "sessions.list") '(:limit 500 :archived "all")))
+       (openclaw-test--reply "sessions.list" (list :sessions openclaw--sessions))
+       (should (string-match-p "^Work\n  Alpha\n  Old$" (buffer-string)))
+       (goto-char (point-min))
+       (search-forward "Old")
+       (should (eq (get-text-property (1- (point)) 'font-lock-face) 'shadow))
+       ;; Archived sessions aren't offered elsewhere.
+       (should (equal (mapcar (lambda (s) (plist-get s :key)) (openclaw--visible-sessions))
+                      '("a")))
+       ;; Opening one restores it, then opens it.
+       (setq openclaw-test--requests nil)
+       (openclaw-sessions-visit)
+       (should (equal (openclaw-test--params "sessions.patch")
+                      '(:key "o" :archived :false :expectedSessionId "s-o")))
+       (should-not (openclaw--chat-buffer "o"))
+       (openclaw-test--reply "sessions.patch" '(:ok t))
+       (should (openclaw--chat-buffer "o"))
+       (should (openclaw-test--request "sessions.groups.list"))
+       (set-buffer "*openclaw-sessions*")
+       (setq openclaw-test--requests nil)
+       (openclaw-sessions-toggle-archived)
+       (openclaw-test--reply "sessions.groups.list" (list :groups openclaw--groups))
+       (should (equal (openclaw-test--params "sessions.list") '(:limit 500))))))
+  (openclaw-test--kill-chats)
+  (openclaw-test--kill-sidebar))
+
 (ert-deftest openclaw-test-sidebar-empty ()
   "Commands on an empty sidebar give a user error."
   (with-current-buffer (get-buffer-create "*openclaw-sessions*")

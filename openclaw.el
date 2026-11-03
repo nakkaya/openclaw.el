@@ -510,6 +510,8 @@ open chats."
 
 (defvar openclaw--groups nil "Group plists from the last `sessions.groups.list'.")
 (defvar openclaw--refresh-timer nil)
+(defvar openclaw--show-archived nil
+  "Non-nil to show archived sessions in the sidebar, toggled with \\`A'.")
 
 (defvar-keymap openclaw-sessions-mode-map
   :parent magit-section-mode-map
@@ -523,6 +525,7 @@ open chats."
   "r" #'openclaw-sessions-rename
   "m" #'openclaw-sessions-move
   "a" #'openclaw-sessions-archive
+  "A" #'openclaw-sessions-toggle-archived
   "k" #'openclaw-sessions-delete
   "g" #'openclaw-sessions-refresh
   "?" #'openclaw-sessions-help
@@ -542,9 +545,11 @@ open chats."
   "Session plist of KEY from the last session list, or nil."
   (seq-find (lambda (s) (equal (plist-get s :key) key)) openclaw--sessions))
 
-(defun openclaw--visible-sessions ()
-  "Sessions shown to you (not archived or background), newest first."
-  (sort (seq-remove (lambda (s) (or (plist-get s :archived) (plist-get s :isBackground)))
+(defun openclaw--visible-sessions (&optional archived)
+  "Sessions shown to you (not archived or background), newest first.
+With ARCHIVED, archived sessions too."
+  (sort (seq-remove (lambda (s) (or (and (plist-get s :archived) (not archived))
+                                    (plist-get s :isBackground)))
                     openclaw--sessions)
         (lambda (a b) (> (or (plist-get a :updatedAt) 0)
                          (or (plist-get b :updatedAt) 0)))))
@@ -566,7 +571,9 @@ open chats."
             ("failed" (propertize "× " 'font-lock-face 'error))
             (_ "  "))
           (propertize (openclaw--session-name s)
-                      'font-lock-face (if (plist-get s :unread) 'font-lock-builtin-face 'default))))
+                      'font-lock-face (cond ((plist-get s :archived) 'shadow)
+                                            ((plist-get s :unread) 'font-lock-builtin-face)
+                                            (t 'default)))))
 
 (defun openclaw--insert-sessions (sessions children &optional depth)
   "Insert SESSIONS, each followed by its CHILDREN (key -> list).
@@ -581,7 +588,7 @@ Each level of DEPTH indents by two columns."
 
 (defun openclaw--render-sidebar ()
   "Redraw the sidebar from the last session list."
-  (let* ((visible (openclaw--visible-sessions))
+  (let* ((visible (openclaw--visible-sessions openclaw--show-archived))
          (keys (mapcar (lambda (s) (plist-get s :key)) visible))
          (children (make-hash-table :test #'equal))
          roots)
@@ -634,7 +641,9 @@ CALLBACK, if non-nil, is called once the sessions are loaded."
   (openclaw-request "sessions.groups.list" nil
                     (lambda (ok res)
                       (when ok (setq openclaw--groups (plist-get res :groups)))
-                      (openclaw-request "sessions.list" '(:limit 500)
+                      (openclaw-request "sessions.list"
+                                        `(:limit 500 ,@(and openclaw--show-archived
+                                                            '(:archived "all")))
                                         (lambda (ok res)
                                           (if (not ok)
                                               (message "OpenClaw: %s" (plist-get res :message))
@@ -667,12 +676,40 @@ chat (its mode line has the session's model and permission mode)."
 (add-hook 'openclaw-event-functions #'openclaw--sessions-on-event)
 
 (defun openclaw-sessions-visit ()
-  "Open the chat buffer for the session at point."
+  "Open the chat buffer for the session at point.
+An archived one, shown with \\[openclaw-sessions-toggle-archived], is restored first."
   (interactive nil openclaw-sessions-mode)
   (let ((section (or (magit-current-section) (user-error "No session at point"))))
-    (if (eq (oref section type) 'openclaw-session)
-        (openclaw-chat (oref section value))
-      (magit-section-toggle section))))
+    (cond ((not (eq (oref section type) 'openclaw-session))
+           (magit-section-toggle section))
+          ((plist-get (openclaw--session (oref section value)) :archived)
+           (openclaw--restore-session (openclaw--session (oref section value))))
+          (t (openclaw-chat (oref section value))))))
+
+(defun openclaw--restore-session (session)
+  "Restore the archived SESSION and open it."
+  (let ((key (plist-get session :key))
+        (window (selected-window)))
+    (openclaw-request "sessions.patch"
+                      `(:key ,key :archived :false
+                        :expectedSessionId ,(plist-get session :sessionId))
+                      (lambda (ok res)
+                        (if (not ok)
+                            (message "OpenClaw restore failed: %s" (plist-get res :message))
+                          (plist-put session :archived nil)
+                          (message "OpenClaw: restored \"%s\"" (openclaw--session-name session))
+                          (openclaw-sessions-refresh)
+                          (when (window-live-p window)
+                            (with-selected-window window
+                              (openclaw-chat key))))))))
+
+(defun openclaw-sessions-toggle-archived ()
+  "Show or hide archived sessions in the sidebar.
+Opening one restores it."
+  (interactive nil openclaw-sessions-mode)
+  (setq openclaw--show-archived (not openclaw--show-archived))
+  (message "OpenClaw: %s archived sessions" (if openclaw--show-archived "showing" "hiding"))
+  (openclaw-sessions-refresh))
 
 (defun openclaw-sessions-mouse-visit (event)
   "Open the session clicked in EVENT (or toggle the clicked group)."
@@ -966,6 +1003,7 @@ An empty GROUP takes the session out of its group."
                          "\\[openclaw-sessions-rename] rename  "
                          "\\[openclaw-sessions-move] move  "
                          "\\[openclaw-sessions-archive] archive  "
+                         "\\[openclaw-sessions-toggle-archived] archived  "
                          "\\[openclaw-sessions-delete] delete  "
                          "\\[openclaw-sessions-refresh] refresh  "
                          "\\[magit-section-toggle] fold  "
@@ -973,7 +1011,8 @@ An empty GROUP takes the session out of its group."
                          "\\[openclaw-open-session] open any"))))
 
 (defun openclaw-sessions-archive ()
-  "Archive the session at point (hides it; restorable from the web UI)."
+  "Archive the session at point.
+It is hidden; \\[openclaw-sessions-toggle-archived] shows it, and opening it restores it."
   (interactive nil openclaw-sessions-mode)
   (let ((session (openclaw--session-at-point)))
     (when (y-or-n-p (format "Archive session \"%s\"? " (openclaw--session-name session)))

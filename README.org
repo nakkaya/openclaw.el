@@ -49,6 +49,7 @@ centered in the window.
 | =r=       | Rename the session                            |
 | =m=       | Move the session to a group (new or existing) |
 | =a=       | Archive the session                           |
+| =A=       | Show or hide archived sessions; open restores |
 | =k=       | Delete the session                            |
 | =g=       | Refresh                                       |
 | =?=       | Show these keys                               |
