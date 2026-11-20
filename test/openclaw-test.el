@@ -885,6 +885,24 @@ the release would land on other text and select up to it as a drag."
            (should (= (shown-gap) rendered))))))
     (openclaw-test--kill-chats)))
 
+(ert-deftest openclaw-test-streamed-thinking-with-code ()
+  "Streamed thinking holding code and paragraphs still ends before the reply.
+Markdown scans the fold's opening fence before the closing one is
+streamed, then rescans only from the blank line before that, where the
+closing fence looked like an opening one."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "tc" (openclaw-test--messages 2))
+     (dolist (d '("So:\n" "```python\nx = 1\n```\n" "\nThen more.\n" "done"))
+       (openclaw--chat-on-event "agent" `(:sessionKey "tc" :stream "thinking" :data (:delta ,d)))
+       ;; As redisplay does after each event.
+       (syntax-propertize (point-max)))
+     (openclaw--chat-on-event "agent" '(:sessionKey "tc" :stream "assistant" :data (:delta "Hello")))
+     (syntax-propertize (point-max))
+     (let ((reply (save-excursion (goto-char (point-max)) (search-backward "Hello"))))
+       (should-not (get-text-property reply 'markdown-fenced-code))
+       (should (get-text-property (- reply 6) 'markdown-tilde-fence-end)))))
+  (openclaw-test--kill-chats))
+
 (ert-deftest openclaw-test-session-tool-event ()
   "Tool calls sent as session.tool, to clients other than the run's, show live."
   (openclaw-test--with-gateway

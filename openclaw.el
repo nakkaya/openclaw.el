@@ -2231,6 +2231,9 @@ FN gets non-nil when STREAM differs from the previous one (a new block)."
           ;; Hide the newline that ends a streamed thinking block too.
           (when openclaw--live-fold
             (insert openclaw--body-fence)   ; close the streamed body
+            ;; Markdown rescans from the blank line before a change; one
+            ;; inside the body would take this fence for an opening one.
+            (syntax-ppss-flush-cache (overlay-start openclaw--live-fold))
             (move-overlay openclaw--live-fold (overlay-start openclaw--live-fold) (point))
             (setq openclaw--live-fold nil))
           (when (and (equal stream "assistant")
