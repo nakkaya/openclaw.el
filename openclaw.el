@@ -2261,8 +2261,9 @@ missing newlines (display only) until the stored messages replace it."
                  (and (> missing 0) (make-string missing ?\n)))))
 
 (defun openclaw--chat-on-event (event payload)
-  "Stream agent EVENT PAYLOAD into its chat buffer."
-  (when (equal event "agent")
+  "Stream agent EVENT PAYLOAD into its chat buffer.
+Clients other than the run's get its tool calls as \"session.tool\"."
+  (when (member event '("agent" "session.tool"))
     (let ((buf (openclaw--chat-buffer (plist-get payload :sessionKey)))
           (data (plist-get payload :data)))
       (when buf

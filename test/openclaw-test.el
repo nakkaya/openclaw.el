@@ -885,6 +885,19 @@ the release would land on other text and select up to it as a drag."
            (should (= (shown-gap) rendered))))))
     (openclaw-test--kill-chats)))
 
+(ert-deftest openclaw-test-session-tool-event ()
+  "Tool calls sent as session.tool, to clients other than the run's, show live."
+  (openclaw-test--with-gateway
+   (with-current-buffer (openclaw-test--open-chat "st")
+     (openclaw--chat-on-event "agent" '(:sessionKey "st" :stream "thinking" :data (:delta "hm")))
+     (openclaw--chat-on-event "session.tool" '(:sessionKey "st" :stream "tool" :data (:phase "start" :name "exec" :args (:command "ls"))))
+     ;; The thinking block is closed and the tool call follows it.
+     (should-not openclaw--live-fold)
+     (should (equal openclaw--live-stream "tool"))
+     (should (= 2 (cl-count-if (lambda (o) (overlay-get o 'openclaw-body))
+                               (overlays-in openclaw--turn-start openclaw--live-marker))))))
+  (openclaw-test--kill-chats))
+
 ;;;; Sending
 
 (ert-deftest openclaw-test-send ()
